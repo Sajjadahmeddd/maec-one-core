@@ -43,15 +43,26 @@ services:
       - key: PYTHONUNBUFFERED
         value: "1"
 
-      # All four set in the dashboard; sync:false keeps them out of git.
+      # Set in the dashboard; sync:false keeps them out of git.
       #
       # DATABASE_URL may point at the same PostgreSQL instance Engineering
       # Tools uses, in its own schema, or at a dedicated instance. Core owns
       # this schema either way — nothing else writes to it.
       - key: DATABASE_URL
         sync: false
+
+      # generateValue, not sync:false: Render makes this once and keeps it,
+      # identical across restarts and across every instance. Nobody has to
+      # invent a string, and nobody can leave it blank.
+      #
+      # The service also refuses to start without it (identity/config.py).
+      # Both, deliberately: the generated value is what makes the common case
+      # correct, and the refusal is what stops a hand-edited environment from
+      # falling back to a per-instance random secret — which signs users out
+      # at intervals that look random and explain themselves nowhere.
       - key: SESSION_SECRET
-        sync: false
+        generateValue: true
+
       - key: BOOTSTRAP_ADMIN_EMAIL
         sync: false
       - key: BOOTSTRAP_ADMIN_PASSWORD

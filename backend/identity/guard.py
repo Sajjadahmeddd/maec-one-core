@@ -26,7 +26,8 @@ from fastapi.responses import JSONResponse
 from . import security
 from .db import session_factory
 from .permissions import (
-    audit, entitled, holds_business_admin, is_global_admin, load_user,
+    audit, entitled, fail_closed, holds_business_admin, is_global_admin,
+    load_user,
 )
 
 PUBLIC_PREFIXES = ("/api/auth/", "/api/health")
@@ -149,8 +150,14 @@ def inspect(request: Request) -> JSONResponse | None:
                   target_id=app_key, source="api", result="blocked", request=request)
             return _refuse(403, "Your account is not licensed for this application.")
         return None
-    except Exception:
-        # Whatever went wrong, the answer is no.
+    except Exception as exc:
+        # Whatever went wrong, the answer is no — and is said out loud. This
+        # is the outermost of the fail-closed handlers: if the database is
+        # unreachable, every request in the service arrives here and every
+        # user sees the same "Sign in required" they would see for an expired
+        # cookie. Without this line a total outage and a routine logout are
+        # the same event in the logs.
+        fail_closed("guard.inspect", exc)
         return _refuse(401, "Sign in required.")
 
 

@@ -15,6 +15,7 @@ session and the same failure posture.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -31,6 +32,30 @@ from .models import (
 )
 
 GLOBAL_ADMIN = "global_admin"
+
+log = logging.getLogger("maec.identity")
+
+
+def fail_closed(where: str, exc: BaseException) -> None:
+    """Record that a refusal was caused by an error, not by a rule.
+
+    Every `except` in this module answers False, which is the right answer —
+    an engine that cannot read its own data must not guess. But refusing
+    silently makes a total outage indistinguishable from ordinary denial:
+    a dropped connection, a migration mid-flight and a typo'd attribute all
+    reach the user as "Sign in required", and the logs say nothing at all.
+    These are the most load-bearing except blocks in the service and they
+    were the quietest. Fail closed, and be loud about it.
+
+    Only the first line of the message is kept, deliberately. SQLAlchemy
+    appends `[SQL: ...]` and `[parameters: ...]` after a newline, and those
+    carry whatever was bound into the statement — an address, a password
+    hash. The first line is the driver's own reason, which is the part worth
+    having and the part that is safe to write down.
+    """
+    reason = (str(exc).splitlines() or [""])[0].strip()[:200]
+    log.warning("identity: %s failed closed — %s: %s",
+                where, type(exc).__name__, reason)
 
 # What an audit row records when there is genuinely nobody to name: a login
 # attempt that supplied no address at all. Every other path has an actor.
@@ -127,7 +152,8 @@ def entitled(db: Session, user: User, app_key: str) -> bool:
             UserLicense.user_id == user.id,
             UserLicense.application_id == app.id))
         return seat is not None
-    except Exception:
+    except Exception as exc:
+        fail_closed('entitled', exc)
         return False
 
 
@@ -166,7 +192,8 @@ def holds_business_admin(db: Session, user: User) -> bool:
     """
     try:
         return any(g.role.key == "business_admin" for g in active_roles(db, user))
-    except Exception:
+    except Exception as exc:
+        fail_closed('holds_business_admin', exc)
         return False
 
 
@@ -176,7 +203,8 @@ def is_global_admin(db: Session, user: User) -> bool:
             if grant.scope_type == "platform" and grant.role.key == GLOBAL_ADMIN:
                 return True
         return False
-    except Exception:
+    except Exception as exc:
+        fail_closed('is_global_admin', exc)
         return False
 
 
@@ -224,6 +252,26 @@ def can(db: Session, user: User | None, permission_key: str,
             return False
 
         # 5. tool rules may narrow what the winning roles allowed, never widen
+        #
+        # Decided, not incidental: when two roles tie at the top specificity
+        # and both allow, a no_access tool rule on EITHER of them refuses.
+        # The restrictive rule wins even though the other role carries no
+        # restriction at all.
+        #
+        # The cost of that is real and worth naming, because it will be
+        # reported as a bug one day: someone with full access to a module,
+        # later also granted a role that is restricted from it at the same
+        # scope, LOSES access by gaining a role. See
+        # test_a_no_access_rule_on_one_tied_role_refuses_for_both.
+        #
+        # It is decided this way because the step immediately above already
+        # settles a tie the same direction — deny beats allow at equal
+        # specificity — and an engine whose two tie-breaks disagree is worse
+        # than one whose single tie-break is occasionally surprising. The
+        # coherent alternative is "allow if any tied grant survives its own
+        # rule", which reads tool rules as narrowing the grant they attach to
+        # rather than the request; it is written up in OPEN-DECISIONS.md.
+        # Either is defensible. Only being undecided is not.
         app = db.scalar(select(Application).where(Application.key == app_key))
         for grant in allowing:
             rule = db.scalar(select(ToolRule).where(
@@ -237,7 +285,8 @@ def can(db: Session, user: User | None, permission_key: str,
             if allows is None or not allows(action):
                 return False
         return True
-    except Exception:
+    except Exception as exc:
+        fail_closed('can', exc)
         return False
 
 

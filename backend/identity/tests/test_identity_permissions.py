@@ -263,6 +263,51 @@ def test_a_tool_rule_cannot_grant_what_the_role_denies(db):
     assert can(db, engineer, AUDIT_EXPORT) is False
 
 
+def test_a_no_access_rule_on_one_tied_role_refuses_for_both(db):
+    """Two roles tie at the top scope, both allow, one is restricted: refused.
+
+    This names a decision rather than an accident, and it names the cost of
+    it: **gaining a role can take access away.** The engineer holds
+    `employee`, which allows convert on hapext. Give them `project_lead` at
+    the same scope — a promotion — where project_lead is restricted from the
+    module, and the promotion removes the access they already had.
+
+    Decided this way for consistency with the tie-break one step earlier,
+    where deny already beats allow at equal specificity. The alternative
+    reading — a tool rule narrows the grant it attaches to, so any tied grant
+    surviving its own rule is enough — is coherent, and is written up in
+    OPEN-DECISIONS.md. If it is ever chosen, this test is the one that has to
+    change, deliberately and with its name updated to say the opposite.
+    """
+    engineer = user(db, ENGINEER_EMAIL)
+    assert can(db, engineer, CONVERT) is True          # via employee, unrestricted
+
+    lead = role(db, "project_lead")
+    assert db.scalar(select(RolePermission).where(
+        RolePermission.role_id == lead.id,
+        RolePermission.permission_id == permission(db, CONVERT).id,
+    )).effect == "allow"                               # the second role allows it too
+
+    db.add(UserRole(user_id=engineer.id, role_id=lead.id,
+                    scope_type="application", scope_id="engineering"))
+    db.commit()
+    assert can(db, engineer, CONVERT) is True          # two allows, still allowed
+
+    # now restrict only the newly gained role
+    db.add(ToolRule(org_id=engineer.org_id, application_id=app(db).id,
+                    module_key="hapext", role_id=lead.id, access_level="no_access"))
+    db.commit()
+    assert can(db, engineer, CONVERT) is False         # <- the surprising one
+
+    # and it is not an artefact of which role was restricted: the same rule
+    # placed on the role they held all along refuses identically
+    db.add(ToolRule(org_id=engineer.org_id, application_id=app(db).id,
+                    module_key="hapext", role_id=role(db, "employee").id,
+                    access_level="full"))
+    db.commit()
+    assert can(db, engineer, CONVERT) is False         # one no_access is enough
+
+
 def test_a_tool_rule_for_another_organisation_does_not_apply(db):
     engineer = user(db, ENGINEER_EMAIL)
     from backend.identity.models import Organization

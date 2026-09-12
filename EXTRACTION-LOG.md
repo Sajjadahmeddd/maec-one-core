@@ -140,7 +140,47 @@ signed in at all. The third asserts `entitled()` and `can()` directly,
 because entitlement is the decision Core owns; watching a product endpoint
 turn 403 was testing the *product's* enforcement of Core's decision.
 
-### 6b. Core's guard still carries Engineering Tools' URL map
+### 6b. The enforcement model itself is on the wrong side of the split
+
+**This is the finding that matters, and it is bigger than 6c below it.**
+
+`can(db, user, key, scope)` takes a live SQLAlchemy `Session` on the identity
+database. So do `entitled()`, `is_global_admin()`, `holds_business_admin()`
+and the guard's `inspect()`. **Every enforcement path in the system reads the
+identity database directly.** The engine's signature assumes co-location.
+
+That was true and fine while Core and Engineering Tools were one process.
+After the split they share nothing — and the guard block that enforces
+entitlement on product routes is *the only entitlement enforcement product
+routes have*. It is now in Core, which hosts none of those routes.
+
+So when Engineering Tools becomes its own service it has no `/api/admin/*`,
+no login, and no identity database, and exactly two ways forward:
+
+**(a) Ship a copy of `identity/` and connect to the identity database.**
+Works immediately. But the code just carefully extracted into one place now
+lives in two repositories and drifts apart from the first hotfix — and it
+means a *product* holds credentials to the identity store, which is the one
+thing the topology says applications must never touch.
+
+**(b) Verify a Core-issued token locally and enforce from its claims.** This
+is the JWKS design and the one the architecture implies. **Nothing for it
+exists**: no token minting, no `aud`, no JWKS endpoint, no client
+registration, no key rotation. The only mention of OIDC anywhere in this
+repository is a docstring.
+
+Neither is wrong. But the choice determines whether `can()` keeps its current
+shape or grows a token-reading sibling that resolves from claims instead of
+rows — and that is a change to the most load-bearing function in the service.
+**It has to be made before Engineering Tools splits, not after.**
+
+The dangerous part is that nothing signals it. Every test in this repository
+passes; the service boots; the admin panel works. The assumption is invisible
+to the entire suite, because the suite and the engine are on the same side of
+the split. Recorded in `OPEN-DECISIONS.md` as the decision blocking the
+split.
+
+### 6c. Core's guard still carries Engineering Tools' URL map
 
 `guard.py` holds:
 
@@ -163,7 +203,14 @@ Engineering Tools verifies a Core-issued token, *it* enforces its own seat
 requirement, using an entitlement claim in the token. That table is the
 product's knowledge, sitting in Core because they used to be one process.
 
-### 6c. The launcher cannot open anything
+**This entry as first written was the surface reading of 6b above.** "Dead
+config in Core" is true and is the small half of it. The large half is that
+the block this table feeds is the only entitlement enforcement product routes
+have, so what is dead here is not spare — it is the enforcement, stranded on
+the wrong side. Left in place until 6b is settled, because deleting it would
+make the gap harder to see, not smaller.
+
+### 6d. The launcher cannot open anything
 
 `applications.base_url` is `NULL` for every row, because until now the one
 product was in the same process and the launcher opened it in place. Core
@@ -191,6 +238,15 @@ value has never been needed.
 Paths are now derived from the package (`Path(backend.identity.__file__)`)
 rather than counted upward from the test file, so moving the suite again
 cannot repeat this.
+
+The same counting pattern survived in `config.REPO_ROOT`
+(`parents[2]`) — production configuration rather than a test, where being
+wrong means `.env` is not found and every setting falls back to its default,
+silently. It now states the layout it assumes and raises if that layout
+moves. Three location-derived paths existed; this was the last one.
+
+The suite stands at **211** after the post-extraction review added the
+config, fail-closed-logging and tied-tool-rule cases.
 
 ---
 

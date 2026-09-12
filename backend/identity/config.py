@@ -14,7 +14,24 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+_HERE = Path(__file__).resolve().parent          # <root>/backend/identity
+REPO_ROOT = _HERE.parents[1]                     # <root>
+
+# Counting directories upward is the pattern that silently disabled the whole
+# PostgreSQL test module during the extraction: the count was wrong, no .env
+# was found, and load_dotenv's answer to a missing file is to do nothing and
+# say nothing. The same count is here, in production config, where being
+# wrong means every secret quietly falls back to its default.
+#
+# So it states what it assumes. This cannot check that .env exists — on
+# Render there is none and every value comes from the dashboard — but it can
+# check the layout the count depends on, which is the part that moves.
+if (REPO_ROOT / "backend" / "identity") != _HERE:
+    raise RuntimeError(
+        f"identity/config.py expected to be at <root>/backend/identity, but "
+        f"is at {_HERE}. REPO_ROOT resolved to {REPO_ROOT}, so .env would "
+        f"not be found and every setting would fall back to its default."
+    )
 
 # override=False: a value already in the environment wins over the file.
 load_dotenv(REPO_ROOT / ".env", override=False)
@@ -55,14 +72,33 @@ def session_secret() -> str:
 
     SESSION_SECRET is the name going forward; MAEC_SECRET_KEY is honoured so
     the value Render already generated keeps working until the dashboard is
-    updated. A generated fallback keeps local development frictionless, at
-    the cost of signing everyone out on restart — which is why deployment
-    warns when neither was set.
+    updated.
+
+    A generated fallback keeps local development frictionless. On Render it
+    is refused outright, because there it has two failure modes and the
+    second is vicious: every restart signs everyone out, and — the moment the
+    service runs more than one instance — each instance generates a
+    *different* secret. Requests round-robin, a session minted on one
+    instance fails to validate on another, and users are signed out at
+    apparently random intervals. Diagnosing that from the symptom is
+    miserable; refusing to boot says it in one line.
+
+    This raises at import rather than at startup because `main.py` reads it
+    while building the session middleware, which happens before the lifespan
+    handler runs. A check in startup would fire after the generated secret
+    was already in use.
     """
     for name in ("SESSION_SECRET", "MAEC_SECRET_KEY"):
         value = os.environ.get(name, "").strip()
         if value:
             return value
+    if on_render():
+        raise RuntimeError(
+            "SESSION_SECRET is not set. Set it in the Render dashboard — "
+            "any long random string. Refusing to start rather than generate "
+            "one, because a generated secret differs per instance and signs "
+            "users out at random once the service scales past one."
+        )
     return secrets.token_urlsafe(32)
 
 

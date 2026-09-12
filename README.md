@@ -56,7 +56,7 @@ proxies `/api` to `:8000`.
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | PostgreSQL. `postgresql+psycopg://user:pass@host:5432/db` — a `postgresql://` URL from a provider is rewritten automatically. URL-encode special characters in the password (`@` → `%40`). |
-| `SESSION_SECRET` | Signs the session cookie. Changing it signs everybody out. |
+| `SESSION_SECRET` | Signs the session cookie. Changing it signs everybody out. Locally, one is generated if unset. On Render the service **refuses to start** without it — a generated secret differs per instance, so sessions would fail to validate on whichever instance did not mint them. `render.yaml` has Render generate and keep one. |
 | `BOOTSTRAP_ADMIN_EMAIL` | The first Global Admin, created by the seed. |
 | `BOOTSTRAP_ADMIN_PASSWORD` | That account's password. 8+ characters with upper, lower, digit and symbol. |
 | `SEED_TEST_USER_EMAIL` | An ordinary engineer, for testing the non-admin path. |
@@ -75,7 +75,7 @@ existing password — set `SEED_RESET_PASSWORDS=1` for a single run to re-apply
 .venv/Scripts/python -m pytest
 ```
 
-202 tests. Most run against an in-memory SQLite; nine run against the
+211 tests. Most run against an in-memory SQLite; nine run against the
 PostgreSQL in your `.env` and cover what SQLite cannot see — column widths,
 CHECK constraints and the append-only trigger. Those nine skip themselves if
 no PostgreSQL is configured.
@@ -84,7 +84,7 @@ no PostgreSQL is configured.
 
 `applications.base_url` is empty for every row. The launcher shows a tile per
 product and opens it by URL, so **each product's address has to be set on its
-row** before a tile does anything. See `EXTRACTION-LOG.md`, finding 6c.
+row** before a tile does anything. See `EXTRACTION-LOG.md`, finding 6d.
 
 ## Reading
 

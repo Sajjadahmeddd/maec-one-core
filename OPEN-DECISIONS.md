@@ -7,6 +7,10 @@ waiting on a person — a designer, a manager, or a second application existing.
 Add to this file rather than leaving a decision in a commit message or a chat
 log, because that is where they get lost.
 
+**Read 11 first.** It is the only one that blocks something: Engineering
+Tools cannot become its own service until it is settled, and settling it
+changes the shape of `can()`. The rest can wait as long as they like.
+
 ---
 
 ## 1. Badge vocabulary on Roles & Permissions — needs the designer
@@ -327,3 +331,72 @@ the most dangerous kind of fabrication in the panel, because it is the one an
 administrator relies on when deciding they are safe. The append-only card
 reporting **off** on SQLite, with the reason, is the shape all of them should
 keep.
+
+---
+
+## 11. How does a separated Engineering Tools enforce anything? — blocking
+
+Every enforcement path takes a live `Session` on the identity database:
+`can()`, `entitled()`, `is_global_admin()`, `holds_business_admin()`, and the
+guard's `inspect()`. That signature assumes Core and the product share a
+process. They do today. After the split they share nothing, and the guard
+block that enforces entitlement on `/api/hapext/`, `/api/airsizer/` and
+`/api/rebadge/` is the only entitlement enforcement those routes have — and
+it is in Core, which does not host them.
+
+See `EXTRACTION-LOG.md` finding 6b for the full statement.
+
+**Option (a): Engineering Tools keeps a copy of `identity/` and connects to
+the identity database.**
+
+Works on day one with no new machinery. Costs: the code just extracted into
+one place now lives in two repositories and drifts from the first hotfix; and
+a product holds credentials to the identity store, which the topology says
+applications must never touch. Every future application repeats both costs.
+
+**Option (b): Core mints a signed token; each product verifies it locally and
+enforces from its claims.**
+
+The design the architecture implies, and the one that scales to eight
+applications. Nothing for it exists yet — no minting, no `aud`, no JWKS
+endpoint, no client registration, no rotation. It also needs an answer for
+freshness, because the current model's best property is that a suspension or
+a revoked seat bites on the *very next request*; a token with any lifetime at
+all trades some of that away, and how much is part of this decision.
+
+**What is not in question:** `can()` stays the resolution engine. Under (b)
+it grows a sibling that resolves from claims rather than rows, and the two
+must share the tie-break rules — one engine with two sources, never two
+engines.
+
+**Settle this before Engineering Tools splits, not after.** Nothing signals
+it in the meantime: the whole suite passes, because the tests and the engine
+are on the same side of the split.
+
+---
+
+## 12. Tool rules at equal specificity — decided, revisit deliberately
+
+When two role grants tie at the top specificity tier and both allow, a
+`no_access` tool rule on **either** refuses — even though the other grant
+carries no restriction. So **gaining a role can take access away**: someone
+with full access to a module, later also granted a role restricted from it at
+the same scope, loses the access they had.
+
+**Decided: the restrictive rule wins.** For consistency with the tie-break
+one step earlier, where deny already beats allow at equal specificity. An
+engine whose two tie-breaks disagree is worse than one whose single tie-break
+is occasionally surprising.
+
+Named in code at `permissions.py` step 5 and pinned by
+`test_a_no_access_rule_on_one_tied_role_refuses_for_both`.
+
+**The coherent alternative**, if the surprise proves worse in practice than
+the inconsistency: read a tool rule as narrowing *the grant it attaches to*
+rather than the request, so the permission is allowed if any tied grant
+survives its own rule. That is a privilege-widening change — it must be a
+deliberate migration with the test renamed to assert the opposite, never a
+quiet loosening because someone reported the surprise as a bug.
+
+**Worth doing either way:** screen 002 can see this case at configuration
+time and say so, which is cheaper than anyone diagnosing it from the symptom.
