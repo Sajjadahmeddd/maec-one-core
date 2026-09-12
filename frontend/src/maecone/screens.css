@@ -1,0 +1,381 @@
+/* Screens carried over from the product stylesheet.
+ *
+ * maecone/theme.css holds the Global Admin tokens and the .maec-* classes.
+ * The sign-in card, the launcher and the password-change gate use a
+ * different vocabulary — .signin-*, .module-*, .launch-* — which lived in
+ * the product's frontend/src/theme.css, above the boundary, because both
+ * halves shared one stylesheet.
+ *
+ * That was the one place the extraction was not a copy: the JavaScript
+ * boundary held completely and the CSS one did not. Nothing failed — the
+ * build succeeded and the pages rendered unstyled, which is exactly the
+ * class of problem a test does not catch.
+ *
+ * Only the rules maecone/ actually uses are here, plus the base elements and
+ * the design tokens they resolve against.
+ */
+
+html, body, #root { height: 100%; margin: 0; }
+
+.tab.active { background: var(--navy); color: #fff; }
+
+.dropzone.active { border-color: var(--green); background: var(--green-soft); }
+
+.summary .key { color: var(--muted); font-size: 10px; font-weight: 700; }
+
+.chips .wchip.active, .chips .wchip.done { background: var(--navy); color: #fff; }
+
+/* ---------- sign-in (MAEC One) --------------------------------------
+   The platform pitch on the left, the sign-in card on the right, in the
+   brand's navy/gold rather than the app's working green. Colours are
+   sampled from the supplied logo and the reference design. */
+.signin {
+  --gold: #C79547;
+  --gold-deep: #A87A34;
+  --ink: #0B1220;
+  /* darkened from #6A7480 once the blueprint went behind the page: on its
+     darker patches the old grey fell to 3.9:1, under the 4.5:1 AA floor */
+  --ink-soft: #5C6674;
+  --line: #E7E7E3;
+  height: 100%;
+  /* The MEP blueprint fills the page behind the whole screen; the wash over
+     it is what keeps body text and the muted greys legible over the darker
+     line work. Lighten the wash and the drawing reads stronger, at the cost
+     of contrast — these two move together. */
+  background:
+    linear-gradient(rgba(253, 253, 254, .40), rgba(253, 253, 254, .40)),
+    url("/login-background.jpg") center / cover no-repeat,
+    #FDFDFE;
+  display: flex;
+  flex-direction: column;
+  /* the content area scrolls, not the page, so the footer is always on
+     screen no matter how short the window or how tall the panel */
+  overflow: hidden;
+}
+
+.signin-body {
+  flex: 1; min-height: 0; overflow: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
+  gap: 44px;
+  /* safe: centred when it fits, top-aligned when it does not, so a short
+     window scrolls from the top instead of clipping it */
+  align-items: safe center;
+  padding: 30px 52px 24px;
+}
+
+/* ---- left: the platform pitch ---- */
+.signin-pitch { max-width: 720px; }
+
+.maec-lockup { margin-bottom: 18px; }
+
+.maec-lockup img { width: 236px; display: block; }
+
+.maec-one {
+  width: 236px;
+  display: flex; align-items: center; gap: 14px;
+  margin: 9px 0 0;
+}
+
+.maec-one::before, .maec-one::after {
+  content: ""; flex: 1; height: 1.5px; background: var(--gold);
+}
+
+.maec-one span {
+  font-size: 18px; font-weight: 500; letter-spacing: .4em;
+  color: var(--ink); padding-left: 4px;
+}
+
+.signin-headline {
+  font-size: 35px; line-height: 1.16; font-weight: 800;
+  color: var(--ink); margin: 0 0 12px; letter-spacing: -.6px;
+  text-wrap: balance;
+}
+
+.signin-headline span { color: var(--gold); }
+
+.signin-standfirst {
+  color: var(--ink-soft); font-size: 14px; line-height: 1.62;
+  margin: 0 0 20px;
+}
+
+.module-grid {
+  list-style: none; margin: 0 0 18px; padding: 0;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px;
+}
+
+/* The tile keeps one face whether it is a plain div on the sign-in screen or
+   a button on the launcher, so the page does not shift between the two. */
+.module-grid > li { display: flex; }
+
+.module-tile {
+  flex: 1;
+  background: rgba(255, 255, 255, .82); border: 1px solid var(--line);
+  border-radius: 13px; padding: 17px 16px 16px;
+  backdrop-filter: blur(2px);
+  font: inherit; color: inherit; text-align: left;
+  display: flex; flex-direction: column;
+}
+
+button.module-tile { cursor: not-allowed; }
+
+button.module-tile.live { cursor: pointer; background: rgba(255, 255, 255, .94); }
+
+button.module-tile.live:hover {
+  border-color: var(--gold);
+  box-shadow: 0 10px 26px -16px rgba(11, 18, 32, .45);
+  transform: translateY(-2px);
+}
+
+button.module-tile.live:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+button.module-tile:not(.live) { opacity: .62; }
+
+/* the strip along the bottom of a tile saying whether it can be opened */
+.module-state {
+  margin-top: auto; padding-top: 9px;
+  display: flex; align-items: center; gap: 5px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--ink-soft);
+}
+
+button.module-tile.live .module-state { color: var(--gold-deep); }
+
+/* on the sign-in screen the same tile is inert, but still says it exists */
+div.module-tile.built .module-state { color: var(--gold-deep); }
+
+div.module-tile:not(.built) { opacity: .72; }
+
+.module-tile h2 {
+  font-size: 13px; font-weight: 700; color: var(--ink); margin: 15px 0 5px;
+}
+
+.module-tile p {
+  font-size: 11px; line-height: 1.5; color: var(--ink-soft); margin: 0;
+}
+
+.module-icon { display: block; line-height: 0; }
+
+.tone-blue   { color: #3B6FD4; }
+
+/* Spread across the tile grid above: the first label sits on the grid's
+   left edge and the last finishes on its right edge, so the strip spans
+   exactly the width of the module tiles. */
+.capability-strip {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; align-items: center; justify-content: space-between;
+  column-gap: 18px;
+}
+
+.capability-strip li {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 12.5px; font-weight: 600; color: #46505F;
+}
+
+.capability-strip li svg { flex: none; color: var(--ink-soft); }
+
+.capability-strip li + li { border-left: 1px solid var(--line); padding-left: 18px; }
+
+/* ---- right: the sign-in card ---- */
+.signin-panel { display: flex; justify-content: center; }
+
+.signin-card {
+  width: 100%; max-width: 432px;
+  background: #fff; border: 1px solid var(--line); border-radius: 20px;
+  padding: 24px 30px 22px;
+  box-shadow: 0 18px 44px -28px rgba(11, 18, 32, .3);
+}
+
+.signin-mark {
+  width: 88px; height: 88px; margin: 0 auto 12px;
+  border: 1px solid #F0EBE1; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
+
+.signin-mark img { width: 54px; }
+
+.signin-welcome {
+  font-size: 25px; font-weight: 800; color: var(--ink);
+  margin: 0; text-align: center; letter-spacing: -.3px;
+}
+
+.signin-sub {
+  color: var(--ink-soft); font-size: 13px;
+  margin: 5px 0 18px; text-align: center;
+}
+
+.signin-label {
+  display: block; font-size: 12.5px; font-weight: 700;
+  color: var(--ink); margin-bottom: 7px;
+}
+
+.signin-field { position: relative; margin-bottom: 13px; }
+
+.signin-adornment {
+  position: absolute; left: 13px; top: 50%; transform: translateY(-50%);
+  color: #9AA1AC; line-height: 0; pointer-events: none;
+}
+
+.signin-field input {
+  width: 100%; padding: 12px 14px 12px 42px;
+  font-size: 13.5px; color: var(--ink);
+  background: #fff; border: 1px solid #E2E2DE; border-radius: 11px;
+}
+
+.signin-field input::placeholder { color: #A9AFB9; letter-spacing: normal; }
+
+.signin-field input:focus {
+  outline: none; border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(199, 149, 71, .16);
+}
+
+.signin-field input[type=password] { letter-spacing: .12em; }
+
+/* Chrome paints autofilled fields its own pale blue, which fought the card.
+   An inset shadow is the only way to override that background; the explicit
+   text fill keeps the value readable once it does. */
+.signin-field input:-webkit-autofill,
+.signin-field input:-webkit-autofill:hover,
+.signin-field input:-webkit-autofill:focus {
+  box-shadow: 0 0 0 100px #fff inset;
+  -webkit-text-fill-color: var(--ink);
+  caret-color: var(--ink);
+}
+
+.signin-reveal {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; cursor: pointer; color: #9AA1AC;
+  padding: 7px; line-height: 0; border-radius: 7px;
+}
+
+.signin-reveal:hover { color: var(--gold-deep); }
+
+.signin-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin: 2px 0 20px;
+}
+
+.signin-remember {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 12.5px; color: #46505F; cursor: pointer;
+}
+
+.signin-remember input {
+  width: 17px; height: 17px; margin: 0; cursor: pointer;
+  accent-color: var(--ink);
+}
+
+.signin-forgot {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--gold-deep); font-size: 12.5px; font-weight: 600;
+  font-family: inherit;
+}
+
+.signin-forgot:hover { text-decoration: underline; }
+
+.signin-error {
+  margin: 0 0 14px; padding: 9px 12px;
+  background: var(--red-soft); border: 1px solid #F3C9C9; border-radius: 9px;
+  color: #A63636; font-size: 12.5px; font-weight: 600;
+}
+
+.signin-hint {
+  margin: 0 0 14px; font-size: 12px; line-height: 1.55; color: var(--ink-soft);
+}
+
+.signin-submit {
+  width: 100%; padding: 13px 0; border: none; border-radius: 11px;
+  background: linear-gradient(180deg, #CE9C4C, #B9873B);
+  color: #fff; font-size: 14.5px; font-weight: 700; cursor: pointer;
+  font-family: inherit;
+}
+
+.signin-submit:hover:not(:disabled) { background: linear-gradient(180deg, #C0913F, #A87A34); }
+
+.signin-submit:disabled { background: #E0D6C3; color: #FBF8F3; cursor: not-allowed; }
+
+.signin-badges {
+  list-style: none; display: flex; margin: 18px 0 0; padding: 14px 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.signin-badges li {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px;
+  color: var(--ink-soft);
+}
+
+.signin-badges li + li { border-left: 1px solid var(--line); }
+
+.signin-badges li > span {
+  display: flex; flex-direction: column; line-height: 1.35; font-size: 10px;
+}
+
+.signin-badges strong { font-size: 11px; font-weight: 700; color: var(--ink); }
+
+/* ---- launcher panel ---- */
+.launch-card { text-align: center; }
+
+.launch-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin: 0 auto 10px; padding: 4px 11px;
+  background: var(--green-soft); color: var(--green-dark);
+  border-radius: 999px; font-size: 11px; font-weight: 700;
+}
+
+.launch-name {
+  margin: 4px 0 0; font-size: 17px; font-weight: 700; color: var(--gold-deep);
+}
+
+.launch-lede {
+  margin: 12px 0 14px; font-size: 13px; line-height: 1.55; color: var(--ink-soft);
+}
+
+.launch-list { list-style: none; margin: 0; padding: 0; text-align: left; }
+
+.launch-open {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  padding: 13px 14px; border: 1px solid var(--line); border-radius: 12px;
+  background: #fff; cursor: pointer; font: inherit; color: var(--ink);
+}
+
+.launch-open:hover { border-color: var(--gold); background: #FFFDF9; }
+
+.launch-open:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+.launch-open .module-icon { flex: none; }
+
+.launch-open-text { flex: 1; display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--ink-soft); }
+
+.launch-open-text strong { font-size: 13px; font-weight: 700; color: var(--ink); }
+
+.launch-open > svg:last-child { flex: none; color: var(--gold-deep); }
+
+.launch-soon { margin: 11px 0 0; font-size: 11px; line-height: 1.5; color: var(--ink-soft); }
+
+.launch-signout {
+  margin-top: 12px; background: none; border: none; cursor: pointer;
+  color: var(--ink-soft); font: inherit; font-size: 12.5px; font-weight: 600;
+  text-decoration: underline;
+}
+
+.launch-signout:hover { color: var(--ink); }
+
+/* ---- footer ---- */
+.signin-footer {
+  flex: none;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 18px; flex-wrap: wrap;
+  padding: 16px 52px; border-top: 1px solid var(--line);
+  color: var(--ink-soft); font-size: 12px;
+  background: rgba(255, 255, 255, .72);
+  backdrop-filter: blur(4px);
+}
+
+.signin-footer-mid { display: flex; align-items: center; gap: 18px; }
+
+/* the hairline between the two policy labels */
+.signin-footer-mid i { width: 1px; height: 12px; background: var(--line); }
+
+.signin-footer a { color: var(--gold-deep); font-weight: 600; text-decoration: none; }
+
+.signin-footer a:hover { text-decoration: underline; }

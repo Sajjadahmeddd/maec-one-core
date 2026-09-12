@@ -1,0 +1,520 @@
+/* MAEC One Core — the Global Admin design tokens.
+   Separate from the product theme (../theme.css) because Core is going to
+   its own repository: this file travels with it. Everything is prefixed
+   --maec- so the two can sit in one document without colliding.
+
+   No component in maecone/admin/ writes a colour literal. If a value is
+   needed that is not here, it belongs here first. */
+
+:root {
+  /* ---- ground and paper */
+  --maec-page: #F5F7FA;          /* very light blue-grey */
+  --maec-card: #FFFFFF;
+  --maec-header: #FFFFFF;
+  --maec-border: #E3E8EF;        /* the 1px on every card */
+  --maec-border-strong: #CDD5E0;
+  --maec-shadow: 0 1px 2px rgba(20, 27, 77, .05);
+
+  /* ---- ink */
+  --maec-ink: #1B2333;
+  --maec-ink-soft: #5A6478;
+  --maec-ink-faint: #8A93A6;
+
+  /* ---- brand */
+  --maec-navy: #141B4D;          /* primary buttons, active toggles */
+  --maec-navy-hover: #1E2A6B;
+  --maec-gold: #C9A227;          /* the wordmark accent */
+  --maec-focus: #1E5EDB;
+
+  /* ---- state, used as fill + ink pairs.
+         Full/granted, partial/scoped, denied, needs review, inactive. */
+  --maec-granted-fill: #E6F4EA;
+  --maec-granted-ink: #1D6B33;
+  --maec-scoped-fill: #E7F0FD;
+  --maec-scoped-ink: #17458F;
+  --maec-denied-fill: #FDECEC;
+  --maec-denied-ink: #A32222;
+  --maec-warn-fill: #FDF3DC;
+  --maec-warn-ink: #7A5B12;
+  --maec-inactive-fill: #F0F2F5;
+  --maec-inactive-ink: #77808F;
+
+  /* ---- controls */
+  --maec-pill-active: #ECEEF2;
+  --maec-toggle-off: #D5DAE2;
+  --maec-row-header: #F4F6F9;
+  --maec-row-line: #EDF0F4;
+
+  /* ---- metrics */
+  --maec-radius: 10px;
+  --maec-radius-sm: 7px;
+  --maec-pad: 22px;
+  --maec-gap: 16px;
+  --maec-row-height: 46px;
+}
+
+/* ---------------------------------------------------------------- shell */
+.maec-admin {
+  min-height: 100%;
+  background: var(--maec-page);
+  color: var(--maec-ink);
+  display: flex;
+  flex-direction: column;
+}
+
+.maec-admin-header {
+  background: var(--maec-header);
+  border-bottom: 1px solid var(--maec-border);
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  padding: 0 26px;
+  height: 62px;
+  flex: none;
+}
+
+.maec-wordmark {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+}
+.maec-wordmark img { height: 21px; display: block; }
+.maec-wordmark span {
+  color: var(--maec-gold);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .16em;
+}
+.maec-wordmark:focus-visible { outline: 2px solid var(--maec-focus); outline-offset: 3px; }
+
+.maec-nav { display: flex; gap: 5px; list-style: none; margin: 0; padding: 0; }
+.maec-pill {
+  background: none;
+  border: none;
+  border-radius: 999px;
+  padding: 8px 17px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--maec-ink-soft);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.maec-pill:hover:not(:disabled) { background: var(--maec-row-header); }
+.maec-pill.active { background: var(--maec-pill-active); color: var(--maec-ink); }
+.maec-pill:disabled { color: var(--maec-ink-faint); cursor: default; }
+.maec-pill:focus-visible { outline: 2px solid var(--maec-focus); outline-offset: 2px; }
+
+.maec-spacer { flex: 1; }
+
+.maec-who { display: flex; align-items: center; gap: 11px; }
+.maec-who-email { font-size: 13px; color: var(--maec-ink-soft); }
+.maec-avatar {
+  width: 33px;
+  height: 33px;
+  border-radius: 50%;
+  background: var(--maec-navy);
+  color: var(--maec-card);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+
+/* ------------------------------------------------------------ tab strip */
+.maec-tabs {
+  background: var(--maec-header);
+  border-bottom: 1px solid var(--maec-border);
+  display: flex;
+  gap: 4px;
+  padding: 0 26px;
+  flex: none;
+}
+.maec-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 13px 15px;
+  margin-bottom: -1px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--maec-ink-soft);
+  cursor: pointer;
+}
+.maec-tab:hover { color: var(--maec-ink); }
+.maec-tab.active { color: var(--maec-navy); border-bottom-color: var(--maec-navy); }
+.maec-tab:focus-visible { outline: 2px solid var(--maec-focus); outline-offset: -2px; }
+
+/* ----------------------------------------------------------- the canvas */
+.maec-body { padding: 26px; flex: 1; }
+
+.maec-card {
+  background: var(--maec-card);
+  border: 1px solid var(--maec-border);
+  border-radius: var(--maec-radius);
+  padding: var(--maec-pad);
+  box-shadow: var(--maec-shadow);
+}
+
+.maec-h1 { font-size: 20px; font-weight: 700; margin: 0 0 5px; }
+.maec-lede { color: var(--maec-ink-soft); font-size: 13px; margin: 0; }
+
+.maec-placeholder { display: grid; gap: 7px; min-height: 220px; align-content: start; }
+.maec-soon {
+  justify-self: start;
+  margin-top: 9px;
+  background: var(--maec-inactive-fill);
+  color: var(--maec-inactive-ink);
+  border-radius: 999px;
+  padding: 5px 13px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* -------------------------------------------- state chips, for Prompt 2 */
+.maec-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 11px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.maec-chip.granted  { background: var(--maec-granted-fill);  color: var(--maec-granted-ink); }
+.maec-chip.scoped   { background: var(--maec-scoped-fill);   color: var(--maec-scoped-ink); }
+.maec-chip.denied   { background: var(--maec-denied-fill);   color: var(--maec-denied-ink); }
+.maec-chip.warn     { background: var(--maec-warn-fill);     color: var(--maec-warn-ink); }
+.maec-chip.inactive { background: var(--maec-inactive-fill); color: var(--maec-inactive-ink); }
+
+/* --------------------------------------------- buttons, for Prompt 2 */
+.maec-btn {
+  border-radius: var(--maec-radius-sm);
+  padding: 9px 17px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.maec-btn.primary { background: var(--maec-navy); color: var(--maec-card); }
+.maec-btn.primary:hover { background: var(--maec-navy-hover); }
+.maec-btn.secondary {
+  background: var(--maec-card);
+  color: var(--maec-ink);
+  border-color: var(--maec-border-strong);
+}
+.maec-btn.secondary:hover { background: var(--maec-row-header); }
+.maec-btn:focus-visible { outline: 2px solid var(--maec-focus); outline-offset: 2px; }
+
+/* ----------------------------------------------- tables, for Prompt 2 */
+.maec-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.maec-table thead th {
+  background: var(--maec-row-header);
+  color: var(--maec-ink-soft);
+  text-align: left;
+  font-weight: 600;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--maec-border);
+  white-space: nowrap;
+}
+.maec-table tbody td {
+  padding: 0 14px;
+  height: var(--maec-row-height);
+  border-bottom: 1px solid var(--maec-row-line);
+}
+.maec-table tbody tr:last-child td { border-bottom: none; }
+
+/* ---------------------------------------------- toggles, for Prompt 2 */
+.maec-toggle {
+  appearance: none;
+  width: 38px;
+  height: 21px;
+  border-radius: 999px;
+  background: var(--maec-toggle-off);
+  position: relative;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.maec-toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: var(--maec-card);
+  transition: transform .15s ease;
+}
+.maec-toggle:checked { background: var(--maec-navy); }
+.maec-toggle:checked::after { transform: translateX(17px); }
+.maec-toggle:focus-visible { outline: 2px solid var(--maec-focus); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .maec-toggle, .maec-toggle::after { transition: none; }
+}
+
+/* ------------------------------------------------- admin screens (001/002)
+   Every colour below resolves to a token defined at the top of this file.
+   Nothing here introduces a literal. */
+
+.maec-stack { display: flex; flex-direction: column; gap: var(--maec-gap); }
+
+.maec-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--maec-gap);
+  margin-bottom: 18px;
+}
+
+.maec-h2 { font-size: 15px; font-weight: 700; margin: 0 0 5px; }
+.maec-sub { color: var(--maec-ink-faint); font-size: 12px; margin-top: 2px; }
+
+.maec-toolbar { display: flex; gap: 10px; margin-bottom: 16px; }
+
+.maec-search {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  padding: 9px 13px;
+  border: 1px solid var(--maec-border-strong);
+  border-radius: var(--maec-radius-sm);
+  background: var(--maec-card);
+  color: var(--maec-ink);
+}
+.maec-search:focus-visible { outline: 2px solid var(--maec-focus); outline-offset: 1px; }
+
+.maec-select {
+  font: inherit;
+  font-size: 12px;
+  padding: 7px 10px;
+  border: 1px solid var(--maec-border-strong);
+  border-radius: var(--maec-radius-sm);
+  background: var(--maec-card);
+  color: var(--maec-ink);
+  max-width: 100%;
+}
+.maec-select:focus-visible { outline: 2px solid var(--maec-focus); outline-offset: 1px; }
+/* the select carries the same state colour as the badge it replaces */
+.maec-select.tone-granted  { border-color: var(--maec-granted-ink); }
+.maec-select.tone-scoped   { border-color: var(--maec-scoped-ink); }
+.maec-select.tone-denied   { border-color: var(--maec-denied-ink); }
+.maec-select.tone-inactive { border-color: var(--maec-border-strong); }
+
+.maec-inline-form {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 14px;
+  margin-bottom: 16px;
+  background: var(--maec-row-header);
+  border: 1px solid var(--maec-border);
+  border-radius: var(--maec-radius-sm);
+}
+
+/* a wide matrix scrolls inside its own box; the page never scrolls sideways */
+.maec-table-wrap { overflow-x: auto; }
+
+.maec-linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--maec-ink);
+  cursor: pointer;
+  text-align: left;
+}
+.maec-linkish:hover { color: var(--maec-focus); }
+.maec-linkish:focus-visible { outline: 2px solid var(--maec-focus); outline-offset: 2px; }
+
+.maec-switch-wrap { display: flex; align-items: center; gap: 9px; }
+
+.maec-error {
+  background: var(--maec-denied-fill);
+  color: var(--maec-denied-ink);
+  border-radius: var(--maec-radius-sm);
+  padding: 10px 13px;
+  font-size: 13px;
+  margin: 0 0 14px;
+}
+
+.maec-note {
+  background: var(--maec-scoped-fill);
+  color: var(--maec-scoped-ink);
+  border-radius: var(--maec-radius-sm);
+  padding: 10px 13px;
+  font-size: 13px;
+  margin: 0 0 14px;
+}
+
+.maec-legend { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 9px; }
+.maec-legend li {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  align-items: start;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--maec-ink-soft);
+}
+
+/* ---------------------------------------------- user management (screen 3) */
+.maec-h3 { font-size: 13px; font-weight: 700; margin: 20px 0 9px; }
+
+.maec-form {
+  padding: 16px;
+  margin-bottom: 16px;
+  background: var(--maec-row-header);
+  border: 1px solid var(--maec-border);
+  border-radius: var(--maec-radius-sm);
+}
+.maec-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.maec-form-grid label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--maec-ink-soft);
+}
+.maec-form-actions { display: flex; gap: 9px; }
+
+.maec-chips { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 9px; }
+.maec-chips li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+.maec-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+/* ------------------------------------------------------- audit (screen 004) */
+.maec-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+.maec-stat {
+  display: grid;
+  gap: 3px;
+  padding: 14px 16px;
+  background: var(--maec-row-header);
+  border: 1px solid var(--maec-border);
+  border-radius: var(--maec-radius-sm);
+}
+.maec-stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--maec-ink);
+}
+.maec-stat-label { font-size: 12px; font-weight: 600; color: var(--maec-ink-soft); }
+.maec-stat-hint { font-size: 11px; color: var(--maec-ink-faint); }
+
+.maec-mono {
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.maec-faint { color: var(--maec-ink-faint); }
+
+.maec-detail {
+  margin-top: 16px;
+  padding: 16px;
+  background: var(--maec-row-header);
+  border: 1px solid var(--maec-border);
+  border-radius: var(--maec-radius-sm);
+}
+.maec-h4 { font-size: 12px; font-weight: 700; margin: 0 0 5px; color: var(--maec-ink-soft); }
+
+.maec-facts {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 5px 14px;
+  margin: 0 0 14px;
+  font-size: 13px;
+}
+.maec-facts dt { font-weight: 600; color: var(--maec-ink-soft); }
+.maec-facts dd { margin: 0; }
+
+.maec-diff { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.maec-diff pre {
+  margin: 0;
+  padding: 10px;
+  background: var(--maec-card);
+  border: 1px solid var(--maec-border);
+  border-radius: var(--maec-radius-sm);
+  font-size: 11px;
+  overflow-x: auto;
+}
+
+.maec-controls { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 9px; }
+.maec-controls li {
+  display: grid;
+  grid-template-columns: 54px 1fr;
+  align-items: start;
+  gap: 12px;
+  font-size: 13px;
+}
+
+/* --------------------------------------------------- onboarding (screen 005) */
+.maec-drop {
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  padding: 30px;
+  margin-bottom: 14px;
+  border: 2px dashed var(--maec-border-strong);
+  border-radius: var(--maec-radius);
+  background: var(--maec-row-header);
+  text-align: center;
+}
+.maec-drop.over { border-color: var(--maec-focus); background: var(--maec-scoped-fill); }
+.maec-drop p { margin: 0; font-size: 13px; }
+.maec-drop label { cursor: pointer; }
+
+.maec-problems {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  background: var(--maec-denied-fill);
+  color: var(--maec-denied-ink);
+  border-radius: var(--maec-radius-sm);
+  font-size: 13px;
+  display: grid;
+  gap: 5px;
+}
+
+/* ------------------------------------------------- provisioning (screen 003) */
+.maec-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+.maec-bigcard {
+  display: grid;
+  gap: 9px;
+  justify-items: start;
+  align-content: start;
+  padding: 18px;
+  background: var(--maec-row-header);
+  border: 1px solid var(--maec-border);
+  border-radius: var(--maec-radius-sm);
+}

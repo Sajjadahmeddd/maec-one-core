@@ -1,0 +1,22 @@
+# MAEC One Core.
+#
+# Pruned by import, not by guess: every package below is imported by
+# backend/identity/ or backend/main.py. The HAP-specific ones the original
+# carried — pymupdf, openpyxl, pillow — belong to Engineering Tools and are
+# not here.
+
+fastapi>=0.110
+uvicorn[standard]>=0.27
+itsdangerous>=2.1          # signs the session cookie (via SessionMiddleware)
+python-multipart>=0.0.9    # the CSV upload on the onboarding screen
+
+sqlalchemy>=2.0
+alembic
+psycopg[binary]
+argon2-cffi
+python-dotenv
+slowapi
+
+# --- tests
+pytest
+httpx                      # fastapi.testclient

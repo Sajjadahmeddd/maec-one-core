@@ -1,0 +1,61 @@
+# MAEC One Core — the identity and administration service.
+#
+# A definition, not a deployment. Nothing here has been applied.
+#
+# This service owns sign-in for every MAEC One product. Engineering Tools is
+# a separate service and will become an OIDC client of this one; until that
+# exists, each product carries its own sign-in.
+
+services:
+  - type: web
+    name: maec-one-core
+    runtime: python
+
+    # Not free: a cold start on the sign-in page is the first thing every
+    # person sees every morning.
+    plan: starter
+
+    # MUST match the database's region and the other services'. Render
+    # cannot change a region after the service is created, and the internal
+    # connection string is not routable across regions.
+    region: singapore
+
+    buildCommand: |
+      npm --prefix frontend ci
+      npm --prefix frontend run build
+      pip install -r backend/requirements.txt
+
+    # Migrations run at start rather than at build: Render's build
+    # environment is not guaranteed to reach the database's private network.
+    # Alembic is fatal if it fails — serving against a half-migrated identity
+    # schema is worse than not serving. The seed is best-effort and leaves
+    # existing passwords alone, so it is safe on every boot.
+    startCommand: >-
+      alembic -c backend/identity/alembic.ini upgrade head &&
+      (python -m backend.identity.seed || true) &&
+      uvicorn backend.main:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 120
+
+    healthCheckPath: /api/health
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+
+      # All four set in the dashboard; sync:false keeps them out of git.
+      #
+      # DATABASE_URL may point at the same PostgreSQL instance Engineering
+      # Tools uses, in its own schema, or at a dedicated instance. Core owns
+      # this schema either way — nothing else writes to it.
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+
+      # SEED_TEST_USER_EMAIL / SEED_TEST_USER_PASSWORD are deliberately
+      # absent: the test engineer is for developer machines only.

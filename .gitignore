@@ -1,0 +1,14 @@
+# ---- Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# ---- Web build artifacts
+frontend/node_modules/
+frontend/dist/
+
+# ---- Never commit real secrets
+.env
+.env.*
+!.env.example
