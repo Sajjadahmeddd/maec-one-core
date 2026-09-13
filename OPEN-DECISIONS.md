@@ -286,9 +286,16 @@ branching on prefixes:
   `entitled` claims, so a product kind here would be enforcement for routes
   Core does not serve. Its content — which product each prefix belongs to — is
   the `aud` the token carries.
-* **Access kinds arrive with their first route.** `CLIENT_CREDENTIALS` and
-  `SESSION_PAGE` are added in the stages that add the token and authorize
-  endpoints, not ahead of them.
+* **Access kinds arrive with their first route.** Two more came with the OIDC
+  provider. `CLIENT_CREDENTIALS` (`/oauth/token`): no session is read and no
+  CSRF header asked for — the caller is a service, which the route
+  authenticates by its secret. `SESSION_PAGE` (`/oauth/authorize`): every check
+  a session route gets, but a refusal redirects the browser to
+  `/?next=<that exact request>` instead of returning JSON, and the SPA follows
+  `next` only to `/oauth/authorize` on the same origin. Chosen over a JSON
+  refusal and over an error page, so someone arriving from Engineering Tools
+  signs in — or changes an administrator-set password — once, and lands back
+  where they were going.
 
 **Why a table rather than a marker on each route**, which is what "what
 restructure means concretely" below proposed: the brief that fired the trigger
