@@ -7,9 +7,9 @@ waiting on a person — a designer, a manager, or a second application existing.
 Add to this file rather than leaving a decision in a commit message or a chat
 log, because that is where they get lost.
 
-**Read 11 first.** It is the only one that blocks something: Engineering
-Tools cannot become its own service until it is settled, and settling it
-changes the shape of `can()`. The rest can wait as long as they like.
+**Read 11 first.** It is decided — option b1 — and it shapes everything the
+OIDC layer builds: what the token carries, and why `can()` becomes one
+resolver fed from two sources. The rest can wait as long as they like.
 
 ---
 
@@ -350,44 +350,82 @@ keep.
 
 ---
 
-## 11. How does a separated Engineering Tools enforce anything? — blocking
+## 11. How does a separated Engineering Tools enforce anything? — decided: b1
 
-Every enforcement path takes a live `Session` on the identity database:
-`can()`, `entitled()`, `is_global_admin()`, `holds_business_admin()`, and the
-guard's `inspect()`. That signature assumes Core and the product share a
-process. They do today. After the split they share nothing, and the guard
-block that enforces entitlement on `/api/hapext/`, `/api/airsizer/` and
-`/api/rebadge/` is the only entitlement enforcement those routes have — and
-it is in Core, which does not host them.
+**Status:** decided before the OIDC layer is built. The token carries the
+*inputs* to the permission decision, and the product re-runs the resolution
+itself. Engineering Tools can split on this basis; nothing for it exists yet —
+no keypair, no JWKS, no client registration, no authorize or token endpoints.
 
-See `EXTRACTION-LOG.md` finding 6b for the full statement.
+**The problem, as it stood.** Every enforcement path takes a live `Session` on
+the identity database: `can()`, `entitled()`, `is_global_admin()`,
+`holds_business_admin()`, and the guard's `inspect()`. After the split Core
+and the product share nothing, and the guard block that enforces entitlement
+on `/api/hapext/`, `/api/airsizer/` and `/api/rebadge/` — the only entitlement
+enforcement those routes have — is in Core, which does not host them. See
+`EXTRACTION-LOG.md` finding 6b.
 
-**Option (a): Engineering Tools keeps a copy of `identity/` and connects to
-the identity database.**
+The set that has to change shape is smaller than "every enforcement path":
+`entitled()`, `active_roles()` with `_covers()`, `can()`, the per-request
+account re-read in `load_user()`, the guard's entitlement block, and
+`audit()`. Everything else that takes a session is administration, and
+administration stays in Core.
 
-Works on day one with no new machinery. Costs: the code just extracted into
-one place now lives in two repositories and drifts from the first hotfix; and
-a product holds credentials to the identity store, which the topology says
-applications must never touch. Every future application repeats both costs.
+**Rejected — (a) a copy of `identity/` in each product, connected to the
+identity database.** The extracted code would live in two repositories and
+drift from the first hotfix, and a product would hold credentials to the
+identity store, which the topology says applications must never touch. Every
+further application repeats both costs.
 
-**Option (b): Core mints a signed token; each product verifies it locally and
-enforces from its claims.**
+**Rejected — (b2) the token carries the answer.** Core resolves and emits an
+effective allow-set. The token is small and the product code trivial, but the
+product can no longer resolve at a scope it learns at request time — a project
+id in a URL (#4) — and the tie-break rules (#12) would live on one side only.
+That is two engines, one of them degenerate.
 
-The design the architecture implies, and the one that scales to eight
-applications. Nothing for it exists yet — no minting, no `aud`, no JWKS
-endpoint, no client registration, no rotation. It also needs an answer for
-freshness, because the current model's best property is that a suspension or
-a revoked seat bites on the *very next request*; a token with any lifetime at
-all trades some of that away, and how much is part of this decision.
+**Decided — (b1) the token carries the inputs.** For its audience application
+only:
 
-**What is not in question:** `can()` stays the resolution engine. Under (b)
-it grows a sibling that resolves from claims rather than rows, and the two
-must share the tie-break rules — one engine with two sources, never two
-engines.
+| Claim | Stands in for the read of | Why it has to be there |
+|---|---|---|
+| `aud` | `applications` by key | a token for Engineering Tools is refused by Timesheet |
+| subject and organisation | `users` | the account the decision is about |
+| entitlement: organisation active, subscription in date, seat held | `organizations`, `subscriptions`, `user_licenses` | step 1 — organisation status is an input since #14 |
+| grants in force: role id, level, scope type, scope id, expiry | `user_roles`, `roles` | steps 2–3 — **role identity is required**: tool rules key on `role_id`, and the tie-break needs each grant's tier |
+| role permissions for that application: allow or deny, per role and permission | `permissions`, `role_permissions` | step 4 |
+| the organisation's tool rules for that application, per role and module | `tool_rules` | step 5, and navigation — `hidden` is read from here (#3) |
+| `permissions_version` | — | how a product learns its claims are stale |
 
-**Settle this before Engineering Tools splits, not after.** Nothing signals
-it in the meantime: the whole suite passes, because the tests and the engine
-are on the same side of the split.
+The product re-runs the same five steps in memory. **One engine, two sources,
+never two engines:** the resolution should be one pure function over those
+inputs, fed from rows by `can()` and from claims by the product, so that no
+tie-break is ever implemented twice. Splitting `can()` into "load the inputs"
+and "resolve them" is the first piece of the OIDC work, not a later cleanup.
+
+**Freshness — the trade, made deliberately.** Today a suspension or a revoked
+seat bites on the very next request. A token with any lifetime gives some of
+that up. It is bounded three ways:
+
+* Core refuses to mint a token for an inactive account or a suspended
+  organisation;
+* the token's lifetime is the longest a revoked access can outlive its
+  revocation in a product — **not chosen yet**; set it with the OIDC layer,
+  as the answer to "how long after I suspend someone";
+* `permissions_version` is bumped by every change to a person's access — role
+  grant or revoke, account status, licence assign or remove, role permission
+  edits, and tool rules set **or cleared** (#13) — so a refresh can tell a
+  stale token from a current one by comparing a number.
+
+**Still open under b1, for the OIDC work to settle:** the token lifetime and
+refresh; how a product writes to the audit trail, since `audit()` is Core's;
+key rotation; and whether a product needs admin-ness at all (probably not —
+administration stays in Core).
+
+**Settled first, so the claims are built on a stable engine** (Prompt 5):
+`edit` is enforced as it claims (#3); a rejected tool-rule batch writes nothing
+and a cleared rule bumps the version (#13); a suspended organisation holds
+nothing (#14). Each would otherwise have been inherited by the claims, or
+silently dropped from them.
 
 ---
 
