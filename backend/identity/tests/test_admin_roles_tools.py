@@ -388,6 +388,31 @@ def test_setting_a_rule_bumps_the_holders(admin_client, db):
     assert db_user(db, ENGINEER_EMAIL).permissions_version > before
 
 
+def test_clearing_a_rule_bumps_the_holders_too(admin_client, db):
+    """Clearing a rule changes access as surely as setting one — here it
+    lifts a no_access. Under the token design the version is how a product
+    learns its tool-rule claims are stale, so a clear that did not bump would
+    leave the removed rule enforced for the token's whole lifetime."""
+    rule = {"application_key": "engineering", "module_key": "hapext",
+            "role_id": str(db_role(db, "employee").id)}
+    assert admin_client.put(TOOLS, headers=headers(admin_client), json={
+        "changes": [{**rule, "access_level": "no_access"}]}).status_code == 200
+    db.expire_all()
+    before = db_user(db, ENGINEER_EMAIL).permissions_version
+
+    assert admin_client.put(TOOLS, headers=headers(admin_client), json={
+        "changes": [{**rule, "access_level": None}]}).status_code == 200
+    db.expire_all()
+    cleared = db_user(db, ENGINEER_EMAIL).permissions_version
+    assert cleared > before
+
+    # clearing a rule that no longer exists changes nobody's access: no bump
+    assert admin_client.put(TOOLS, headers=headers(admin_client), json={
+        "changes": [{**rule, "access_level": None}]}).status_code == 200
+    db.expire_all()
+    assert db_user(db, ENGINEER_EMAIL).permissions_version == cleared
+
+
 def test_the_matrix_lists_the_real_modules(admin_client):
     body = admin_client.get(TOOLS).json()
     assert [m["module_key"] for m in body["modules"]] == [

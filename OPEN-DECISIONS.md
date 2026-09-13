@@ -459,9 +459,15 @@ the caller rolls back. A durable refusal record and the caller's
 all-or-nothing cannot both win inside one transaction, and the caller's
 atomicity does. A caller that needs the record writes it after its rollback.
 
-**Noticed, not changed:** clearing a tool rule does not bump its holders'
-`permissions_version`, though setting one does. Harmless today — nothing reads
-the version — but it will matter the day a token carries it.
+**Fixed before merge:** clearing a tool rule did not bump its holders'
+`permissions_version`, though setting one did. First filed as a nit, because
+nothing reads the version today; under b1 (#11) it is a correctness bug. The
+version is how a product learns its tool-rule claims are stale, so a clear
+that does not bump leaves a removed rule enforced for the token's whole
+lifetime with no signal — the same shape as the `edit` defect in #3, an
+access-control change that silently does not take effect. Clearing an
+existing rule now bumps its holders; clearing one that does not exist bumps
+nobody. Pinned by `test_clearing_a_rule_bumps_the_holders_too`.
 
 ---
 

@@ -231,24 +231,29 @@ def put_tool_rules(body: ToolRulesPut, request: Request,
             ToolRule.role_id == role.id))
 
         if change.access_level is None:
-            if existing is not None:
-                db.delete(existing)
-                applied.append({"module": change.module_key, "role": role.key,
-                                "access_level": None})
-            continue
-
-        if existing is None:
-            db.add(ToolRule(org_id=actor.org_id, application_id=app.id,
-                            module_key=change.module_key, role_id=role.id,
-                            access_level=change.access_level, status=change.status,
-                            updated_by=actor.id))
+            if existing is None:
+                continue                  # nothing to clear: nobody's access changes
+            db.delete(existing)
+            applied.append({"module": change.module_key, "role": role.key,
+                            "access_level": None})
         else:
-            existing.access_level = change.access_level
-            existing.status = change.status
-            existing.updated_by = actor.id
-        applied.append({"module": change.module_key, "role": role.key,
-                        "access_level": change.access_level, "status": change.status})
+            if existing is None:
+                db.add(ToolRule(org_id=actor.org_id, application_id=app.id,
+                                module_key=change.module_key, role_id=role.id,
+                                access_level=change.access_level, status=change.status,
+                                updated_by=actor.id))
+            else:
+                existing.access_level = change.access_level
+                existing.status = change.status
+                existing.updated_by = actor.id
+            applied.append({"module": change.module_key, "role": role.key,
+                            "access_level": change.access_level, "status": change.status})
 
+        # Clearing a rule changes access as surely as setting one — usually it
+        # widens it — so its holders are bumped either way. Under the token
+        # design this version is how a product learns its tool-rule claims are
+        # stale: a clear that did not bump would leave a removed rule enforced
+        # for the token's whole lifetime, with no signal. OPEN-DECISIONS #13.
         for user_id in db.scalars(select(UserRole.user_id).where(
                 UserRole.role_id == role.id)).all():
             affected_users.add(user_id)
