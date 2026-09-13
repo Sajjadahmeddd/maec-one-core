@@ -65,6 +65,9 @@ ROUTES: dict[str, Access] = {
     "/api/auth/change-password": Access.PUBLIC,
     "/api/health": Access.PUBLIC,
 
+    # The OIDC provider. JWKS is public by design: public keys, nothing else.
+    "/.well-known/jwks.json": Access.PUBLIC,
+
     # FastAPI's generated documentation describes the admin API, so it is not
     # handed to strangers.
     "/openapi.json": Access.SESSION,

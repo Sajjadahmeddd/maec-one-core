@@ -30,7 +30,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .identity import (
     admin_audit, admin_import, admin_provisioning, admin_roles, admin_tools,
-    admin_users, guard, keys, router_admin, router_auth,
+    admin_users, guard, keys, router_admin, router_auth, router_oidc,
 )
 
 # Core's own version. The original read this from `hap_converter.__version__`,
@@ -195,6 +195,9 @@ app.include_router(admin_users.router)
 app.include_router(admin_audit.router)
 app.include_router(admin_import.router)
 app.include_router(admin_provisioning.router)
+# The OIDC provider. Here with the others, before the SPA catch-all below: a
+# route registered after the catch-all is answered with index.html and a 200.
+app.include_router(router_oidc.router)
 
 
 @app.get("/api/health")
