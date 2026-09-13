@@ -1,11 +1,10 @@
 """/api/admin — the Global Admin API.
 
-Empty on purpose: the five admin screens are the next build. What exists
-now is the lock on the door. Every route that is ever added under this
-prefix inherits `require_global_admin` from the router, and the guard in
-`guard.py` refuses the whole prefix — including paths that do not exist
-yet — to anyone who is not a Global Admin, and refuses any mutation without
-the CSRF header. Two independent checks; the frontend is not one of them.
+The lock on the door. Every route added under this prefix inherits
+`require_global_admin` from its router, and `guard.py` independently refuses
+each admin row in its access table to anyone who is not a Global Admin, and
+any mutation without the CSRF header. A path with no row is refused outright.
+Two independent checks; the frontend is not one of them.
 
 `GET /api/admin/whoami` is the one route present, so the lock can be
 tested end to end before there is anything behind it.

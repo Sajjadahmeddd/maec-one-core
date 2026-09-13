@@ -36,8 +36,8 @@ from .permissions import (
 )
 
 # Global Admin on the prefix is the floor: every route added here
-# inherits it, and guard.py refuses the whole /api/admin prefix a
-# second time, independently.
+# inherits it, and guard.py refuses each admin row a second time,
+# independently. A route added here also needs a row in guard.ROUTES.
 router = APIRouter(prefix="/api/admin", tags=["admin"],
                    dependencies=[Depends(require_global_admin)])
 

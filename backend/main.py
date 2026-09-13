@@ -105,13 +105,13 @@ SECURITY_HEADERS = {
 # every request looks signed out.
 @app.middleware("http")
 async def gate(request: Request, call_next):
-    """Refuse API calls from anyone who may not make them.
+    """Refuse requests from anyone who may not make them.
 
     The SPA itself is always served — it has to load in order to show a login
-    screen — so only /api/* is gated, minus the login exchange and health.
-    The rules live in identity/guard.py: a live account, Global Admin for
-    /api/admin/*, and the CSRF header for admin mutations. It reads the
-    database, so it runs in a worker thread rather than on the event loop.
+    screen. What every other route requires is declared in guard.ROUTES, and
+    a path under /api, /oauth or /.well-known with no row there is refused.
+    The guard reads the database, so it runs in a worker thread rather than
+    on the event loop.
     """
     refusal = await run_in_threadpool(guard.inspect, request)
     try:

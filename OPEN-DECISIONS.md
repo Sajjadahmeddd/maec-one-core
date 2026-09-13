@@ -254,8 +254,53 @@ Render that as `—` in the ACTOR column rather than showing the sentinel.
 
 ## 9. The guard has one path exception. The second one means restructure.
 
-**Status:** a line drawn in advance. The exception itself is fine; the second
-one is the problem, and it will not look like a problem when it arrives.
+**Status: the trigger fired in Prompt 6, and the restructure is done.** The
+OIDC provider needed three new access shapes at once — a fully public JWKS, a
+token endpoint authenticated by client credentials, and an authorize endpoint
+that needs a session and every interstitial check. That is not a second
+exception; it is three, and the line below was drawn for exactly this moment.
+
+**What replaced the prefix checks.** `PUBLIC_PREFIXES`, `DOCS_PREFIXES`,
+`ADMIN_PREFIX`, `ADMIN_READER_PATHS` and `APP_PREFIXES` are gone as sources of
+truth. `guard.ROUTES` maps every route path, written exactly as the route
+declares it, to one `Access` value, and `inspect()` reads that table instead of
+branching on prefixes:
+
+* **Default-deny.** A path under `/api`, `/oauth` or `/.well-known` with no row
+  is refused with 404 — for a Global Admin as much as a stranger. Every other
+  path is the SPA. (Before, an unmatched `/api/` path simply required a
+  session, and a stranger got 401 for it.)
+* **The table cannot drift from the application.** `test_guard_table.py` walks
+  the registered routes and fails in both directions: a route with no row, or a
+  row with no route. That answers the objection written at the bottom of this
+  entry — a table of paths *is* a second copy of the routing table, so it is
+  held to the first by a test rather than by care.
+* **The audit exception is four rows**, `ADMIN_AUDIT_READ`, and
+  `ADMIN_READER_PATHS` is now derived from them. `may_read_audit()` and its
+  tests are unchanged.
+* **The order of checks is unchanged** for every route that needs a person:
+  session, active account, `must_change_password`, route access, CSRF.
+* **No `PRODUCT` access kind.** `APP_PREFIXES` mapped Engineering Tools' URL
+  prefixes to entitlement, but no Core route has ever matched them. Under b1
+  (#11) the product enforces its own entitlement from the token's `aud` and
+  `entitled` claims, so a product kind here would be enforcement for routes
+  Core does not serve. Its content — which product each prefix belongs to — is
+  the `aud` the token carries.
+* **Access kinds arrive with their first route.** `CLIENT_CREDENTIALS` and
+  `SESSION_PAGE` are added in the stages that add the token and authorize
+  endpoints, not ahead of them.
+
+**Why a table rather than a marker on each route**, which is what "what
+restructure means concretely" below proposed: the brief that fired the trigger
+asked for one explicit table, and the two-way test removes the drift that made
+a table unattractive. A reader who wants to know what any route requires reads
+one file.
+
+What follows is the entry as written before the trigger fired.
+
+**Original status:** a line drawn in advance. The exception itself is fine;
+the second one is the problem, and it will not look like a problem when it
+arrives.
 
 `guard.inspect()` is one rule: **everything under `/api/admin/` requires
 Global Admin**. It now has exactly one exception:

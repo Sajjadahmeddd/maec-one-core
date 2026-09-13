@@ -1,17 +1,24 @@
 """The request-time gate.
 
 `main.py`'s guard middleware calls `inspect()` for every request and returns
-whatever it returns, so the rules are here in one place:
+whatever it returns. What each route requires is declared once, in `ROUTES`,
+and `inspect()` reads that table — it does not branch on path prefixes. The
+table replaced four prefix constants when a second exception to "everything
+under /api/admin needs Global Admin" came due; see OPEN-DECISIONS #9.
 
-* the SPA shell and its assets are always served — a login screen has to
-  load from somewhere;
-* everything under /api/ needs a session that resolves to an active user,
-  except the login exchange and the health probe;
-* /docs, /redoc and /openapi.json are treated like the API;
-* /api/admin/* additionally needs Global Admin, and a mutation there needs
-  the CSRF header;
-* each product's routes need entitlement to that product. A person without
-  a seat gets a 403 from the API however they reached the URL.
+Three properties hold whatever is added to the table:
+
+* **Default-deny.** A path under a namespace this service owns — /api,
+  /oauth, /.well-known — with no row is refused, not guessed at. Every other
+  path is the SPA shell and its assets, which have to load for a sign-in
+  screen to exist at all.
+* **One order of checks** for every route that needs a person: a session, an
+  active account, no password change outstanding, then what the route
+  requires, then the CSRF header on a mutation. A route cannot skip the
+  interstitial checks by being mounted somewhere convenient.
+* **The table matches the application.** A test walks the registered routes
+  and fails if a route has no row or a row has no route, so the table cannot
+  drift into a second, stale copy of the routing table.
 
 The user is read from the database on every guarded call. That is a
 primary-key lookup, and it is what makes a suspension or a revoked seat bite
@@ -20,38 +27,122 @@ on the very next request rather than at cookie expiry.
 
 from __future__ import annotations
 
+from enum import Enum
+
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from starlette.routing import compile_path
 
 from . import security
 from .db import session_factory
 from .permissions import (
-    audit, entitled, fail_closed, holds_business_admin, is_global_admin,
-    load_user,
+    audit, fail_closed, holds_business_admin, is_global_admin, load_user,
 )
 
-PUBLIC_PREFIXES = ("/api/auth/", "/api/health")
-DOCS_PREFIXES = ("/docs", "/redoc", "/openapi.json")
-ADMIN_PREFIX = "/api/admin"
 
-# The one place under /api/admin a non-Global-Admin may reach, and only to
-# read: a Business & Commercial Lead sees the audit trail for the
-# applications they lead. The endpoint checks again and scopes the query, so
-# this is a narrowing of who gets past the door, not a replacement for the
-# lock behind it.
-#
-# Exact paths, not a prefix. A prefix would hand the exception to anything
-# mounted under /api/admin/audit/ later — a retention endpoint, a purge, a
-# per-actor drill-down — without anyone deciding it should have it. Adding a
-# route here has to be a deliberate line in this file, which is the only form
-# of "deliberate" that survives someone who has not read OPEN-DECISIONS #9.
-ADMIN_READER_PATHS = frozenset({
-    "/api/admin/audit",
-    "/api/admin/audit/stats",
-    "/api/admin/audit/controls",
-    "/api/admin/audit/export",
-})
+class Access(str, Enum):
+    """What a route requires before a request reaches it."""
+
+    # Anyone. No session is read and no CSRF header is asked for.
+    PUBLIC = "public"
+    # An active account that has cleared every interstitial check.
+    SESSION = "session"
+    # SESSION, and Global Admin. A mutation also needs the CSRF header.
+    ADMIN = "admin"
+    # ADMIN — except that a Business Admin may read, by GET or HEAD only. The
+    # endpoint checks again and scopes the query to the applications they lead.
+    ADMIN_AUDIT_READ = "admin_audit_read"
+
+
+# Every route this service serves, and what it requires. Paths are written
+# exactly as the routes declare them, `{parameters}` included.
+ROUTES: dict[str, Access] = {
+    # Signing in, and the ways out. /me answers a signed-out browser too, and
+    # change-password has to stay reachable while a password change is due.
+    "/api/auth/login": Access.PUBLIC,
+    "/api/auth/logout": Access.PUBLIC,
+    "/api/auth/me": Access.PUBLIC,
+    "/api/auth/change-password": Access.PUBLIC,
+    "/api/health": Access.PUBLIC,
+
+    # FastAPI's generated documentation describes the admin API, so it is not
+    # handed to strangers.
+    "/openapi.json": Access.SESSION,
+    "/docs": Access.SESSION,
+    "/docs/oauth2-redirect": Access.SESSION,
+    "/redoc": Access.SESSION,
+
+    # The Global Admin panel.
+    "/api/admin/whoami": Access.ADMIN,
+    "/api/admin/roles": Access.ADMIN,
+    "/api/admin/roles/{role_id}": Access.ADMIN,
+    "/api/admin/tool-rules": Access.ADMIN,
+    "/api/admin/users": Access.ADMIN,
+    "/api/admin/users/options": Access.ADMIN,
+    "/api/admin/users/{user_id}": Access.ADMIN,
+    "/api/admin/users/{user_id}/roles": Access.ADMIN,
+    "/api/admin/users/{user_id}/roles/{grant_id}": Access.ADMIN,
+    "/api/admin/users/{user_id}/licenses": Access.ADMIN,
+    "/api/admin/users/{user_id}/licenses/{application_key}": Access.ADMIN,
+    "/api/admin/users/{user_id}/reset-password": Access.ADMIN,
+    "/api/admin/import/validate": Access.ADMIN,
+    "/api/admin/import/commit": Access.ADMIN,
+    "/api/admin/import/batches": Access.ADMIN,
+    "/api/admin/import/template": Access.ADMIN,
+    "/api/admin/provisioning": Access.ADMIN,
+    "/api/admin/provisioning/{rule_id}": Access.ADMIN,
+
+    # The audit reads: the one place under /api/admin a non-Global-Admin may
+    # reach. Exact rows, not a prefix — a retention endpoint or a purge mounted
+    # under /api/admin/audit/ later has no row, so it is refused until someone
+    # adds one deliberately.
+    "/api/admin/audit": Access.ADMIN_AUDIT_READ,
+    "/api/admin/audit/stats": Access.ADMIN_AUDIT_READ,
+    "/api/admin/audit/controls": Access.ADMIN_AUDIT_READ,
+    "/api/admin/audit/export": Access.ADMIN_AUDIT_READ,
+}
+
+# Namespaces this service owns. A path inside one with no row in ROUTES is
+# refused. Every other path belongs to the SPA.
+RESERVED = ("/api", "/oauth", "/.well-known")
+
 SAFE_METHODS = frozenset({"GET", "HEAD"})
+MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# Derived from the table rather than kept beside it, so the exception has one
+# definition. may_read_audit reads this, and a test pins it to exactly four.
+ADMIN_READER_PATHS = frozenset(
+    path for path, access in ROUTES.items() if access is Access.ADMIN_AUDIT_READ)
+
+_EXACT = {path: access for path, access in ROUTES.items() if "{" not in path}
+_PATTERNS = [(compile_path(path)[0], access)
+             for path, access in ROUTES.items() if "{" in path]
+
+
+def _normal(path: str) -> str:
+    return path.rstrip("/") or "/"
+
+
+def _reserved(path: str) -> bool:
+    return any(path == namespace or path.startswith(namespace + "/")
+               for namespace in RESERVED)
+
+
+def access_for(path: str) -> Access | None:
+    """What this path requires, or None when it is refused unseen.
+
+    An exact row wins over a parameterised one, so /api/admin/users/options is
+    never read as a user id.
+    """
+    normal = _normal(path)
+    if normal in _EXACT:
+        return _EXACT[normal]
+    for pattern, access in _PATTERNS:
+        if pattern.match(normal):
+            return access
+    if _reserved(normal):
+        return None
+    return Access.PUBLIC            # the SPA shell and its assets
 
 
 def may_read_audit(path: str, method: str) -> bool:
@@ -61,32 +152,7 @@ def may_read_audit(path: str, method: str) -> bool:
     "would a new sub-path inherit this?" should be answerable by a test, not
     by reading the middleware.
     """
-    return (path.rstrip("/") or "/") in ADMIN_READER_PATHS and method in SAFE_METHODS
-MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-
-# Which product each API prefix belongs to. A request under one of these
-# needs a seat on that product. Engineering Tools' own routers are not
-# touched — the gate sits in front of them.
-APP_PREFIXES: dict[str, str] = {
-    "/api/hapext/": "engineering",
-    "/api/airsizer/": "engineering",
-    "/api/rebadge/": "engineering",
-}
-
-
-def requires_auth(path: str) -> bool:
-    if path.startswith(DOCS_PREFIXES):
-        return True
-    if not path.startswith("/api/"):
-        return False
-    return not path.startswith(PUBLIC_PREFIXES)
-
-
-def _app_for(path: str) -> str | None:
-    for prefix, app_key in APP_PREFIXES.items():
-        if path.startswith(prefix):
-            return app_key
-    return None
+    return _normal(path) in ADMIN_READER_PATHS and method in SAFE_METHODS
 
 
 def _refuse(status: int, detail: str) -> JSONResponse:
@@ -100,7 +166,10 @@ def inspect(request: Request) -> JSONResponse | None:
     runs it in a worker thread so the event loop is never blocked on it.
     """
     path = request.url.path
-    if not requires_auth(path):
+    access = access_for(path)
+    if access is None:
+        return _refuse(404, "Not found.")
+    if access is Access.PUBLIC:
         return None
 
     user_id = security.session_user_id(request)
@@ -122,18 +191,19 @@ def inspect(request: Request) -> JSONResponse | None:
             return _refuse(401, "Sign in required.")
 
         # An administrator set this password and therefore knows it. Until the
-        # person replaces it, nothing else in the API answers — otherwise the
-        # "must change" is a suggestion the UI makes and a script ignores.
-        # /api/auth/* is already public-prefixed, so change-password, /me and
-        # logout stay reachable: the way out is never blocked.
+        # person replaces it, no route that needs a session answers — otherwise
+        # the "must change" is a suggestion the UI makes and a script ignores.
+        # The way out, /api/auth/change-password, is a PUBLIC row, so it is
+        # never blocked.
         if user.must_change_password:
             return _refuse(403, "Password change required.")
 
-        if path.startswith(ADMIN_PREFIX):
+        if access in (Access.ADMIN, Access.ADMIN_AUDIT_READ):
             # resolved once and remembered: require_global_admin reads this
             # back rather than asking the same question a second time
             request.state.is_global_admin = is_global_admin(db, user)
-            reading_audit = (may_read_audit(path, request.method)
+            reading_audit = (access is Access.ADMIN_AUDIT_READ
+                             and may_read_audit(path, request.method)
                              and holds_business_admin(db, user))
             if not request.state.is_global_admin and not reading_audit:
                 audit(db, actor=user, action="admin.access", target_type="route",
@@ -143,12 +213,6 @@ def inspect(request: Request) -> JSONResponse | None:
                 audit(db, actor=user, action="admin.csrf", target_type="route",
                       target_id=path, source="api", result="blocked", request=request)
                 return _refuse(403, "Missing or invalid CSRF token.")
-
-        app_key = _app_for(path)
-        if app_key is not None and not entitled(db, user, app_key):
-            audit(db, actor=user, action="app.access", target_type="application",
-                  target_id=app_key, source="api", result="blocked", request=request)
-            return _refuse(403, "Your account is not licensed for this application.")
         return None
     except Exception as exc:
         # Whatever went wrong, the answer is no — and is said out loud. This
