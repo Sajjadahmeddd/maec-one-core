@@ -28,9 +28,10 @@ on the very next request rather than at cookie expiry.
 from __future__ import annotations
 
 from enum import Enum
+from urllib.parse import quote
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.routing import compile_path
 
 from . import security
@@ -47,6 +48,11 @@ class Access(str, Enum):
     PUBLIC = "public"
     # An active account that has cleared every interstitial check.
     SESSION = "session"
+    # SESSION, for a page a browser navigates to rather than an API a script
+    # calls. Every check is the same; a refusal is a redirect to Core's
+    # sign-in, carrying the request to come back to, instead of JSON the
+    # browser would show raw.
+    SESSION_PAGE = "session_page"
     # SESSION, and Global Admin. A mutation also needs the CSRF header.
     ADMIN = "admin"
     # ADMIN — except that a Business Admin may read, by GET or HEAD only. The
@@ -67,6 +73,10 @@ ROUTES: dict[str, Access] = {
 
     # The OIDC provider. JWKS is public by design: public keys, nothing else.
     "/.well-known/jwks.json": Access.PUBLIC,
+    # Deliberately not under /api/auth, whose rows are PUBLIC: mounted there,
+    # someone who never replaced an administrator-set password could still
+    # obtain a code. As a SESSION_PAGE it gets every interstitial check.
+    "/oauth/authorize": Access.SESSION_PAGE,
 
     # FastAPI's generated documentation describes the admin API, so it is not
     # handed to strangers.
@@ -162,7 +172,18 @@ def _refuse(status: int, detail: str) -> JSONResponse:
     return JSONResponse({"detail": detail}, status_code=status)
 
 
-def inspect(request: Request) -> JSONResponse | None:
+def _to_sign_in(request: Request) -> RedirectResponse:
+    """Send a browser to Core's sign-in, to come back to exactly this request.
+
+    `next` is built from this request's own path and query, never from a
+    parameter anyone supplied. The SPA follows it only to /oauth/authorize on
+    this origin, and the authorize endpoint re-checks everything on return.
+    """
+    target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+    return RedirectResponse("/?next=" + quote(target, safe=""), status_code=302)
+
+
+def inspect(request: Request) -> JSONResponse | RedirectResponse | None:
     """A response to send instead, or None to let the request through.
 
     Synchronous on purpose — it does a database lookup, and the middleware
@@ -174,10 +195,11 @@ def inspect(request: Request) -> JSONResponse | None:
         return _refuse(404, "Not found.")
     if access is Access.PUBLIC:
         return None
+    page = access is Access.SESSION_PAGE
 
     user_id = security.session_user_id(request)
     if not user_id:
-        return _refuse(401, "Sign in required.")
+        return _to_sign_in(request) if page else _refuse(401, "Sign in required.")
 
     db = session_factory()()
     request.state.identity_db = db          # released in release(), below
@@ -191,15 +213,15 @@ def inspect(request: Request) -> JSONResponse | None:
         request.state.identity_user = user
         if user is None:
             security.end_session(request)      # suspended or gone: forget them
-            return _refuse(401, "Sign in required.")
+            return _to_sign_in(request) if page else _refuse(401, "Sign in required.")
 
         # An administrator set this password and therefore knows it. Until the
         # person replaces it, no route that needs a session answers — otherwise
         # the "must change" is a suggestion the UI makes and a script ignores.
         # The way out, /api/auth/change-password, is a PUBLIC row, so it is
-        # never blocked.
+        # never blocked; a page is sent to sign-in, where the SPA shows it.
         if user.must_change_password:
-            return _refuse(403, "Password change required.")
+            return _to_sign_in(request) if page else _refuse(403, "Password change required.")
 
         if access in (Access.ADMIN, Access.ADMIN_AUDIT_READ):
             # resolved once and remembered: require_global_admin reads this

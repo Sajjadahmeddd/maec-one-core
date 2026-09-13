@@ -22,11 +22,48 @@ import { INTERNAL } from './maecone/MaecOne.jsx'
 /** A Global Admin lands in the panel; everyone else on the launcher. */
 const homeFor = (session) => (session?.is_global_admin ? '/admin' : '/')
 
+/**
+ * Where to go once signed in, when Core's authorize endpoint sent the browser
+ * here first. The guard redirects an unsigned or must-change-password visitor
+ * to `/?next=<the authorize URL>`; after sign-in (and any password change) we
+ * go back there, and the server re-checks everything.
+ *
+ * Only ever back to /oauth/authorize on this origin. Anything else in `next`
+ * is dropped, so the parameter cannot be used to send someone elsewhere.
+ */
+function authorizeReturn() {
+  try {
+    const raw = new URLSearchParams(window.location.search).get('next')
+    if (!raw) return null
+    const url = new URL(raw, window.location.origin)
+    if (url.origin !== window.location.origin || url.pathname !== '/oauth/authorize') return null
+    return url.pathname + url.search
+  } catch {
+    return null
+  }
+}
+
 export default function App() {
   const navigate = useNavigate()
 
+  // read once: the address bar changes as soon as the client router navigates
+  const [next] = useState(authorizeReturn)
+
   // null while we ask the server; then the payload from GET /api/auth/me
   const [session, setSession] = useState(null)
+
+  // Signed in, with no password change outstanding: finish the handoff.
+  useEffect(() => {
+    if (next && session?.authenticated && !session.must_change_password) {
+      window.location.assign(next)
+    }
+  }, [next, session])
+
+  /** After sign-in or a password change: back to authorize, or home. */
+  const land = (who) => {
+    setSession(who)
+    if (!next) navigate(homeFor(who), { replace: true })
+  }
 
   useEffect(() => {
     authApi.me()
@@ -62,20 +99,21 @@ export default function App() {
   // refuses every call but /api/auth/* until it is replaced, so there is
   // nowhere else to send them.
   if (session.must_change_password) {
-    return (
-      <ChangePassword
-        session={session}
-        onChanged={(who) => { setSession(who); navigate(homeFor(who), { replace: true }) }}
-        onSignOut={signOut}
-      />
-    )
+    return <ChangePassword session={session} onChanged={land} onSignOut={signOut} />
   }
 
   if (!session.authenticated) {
-    return <Login apps={session.apps} onSignedIn={(who) => {
-      setSession(who)
-      navigate(homeFor(who), { replace: true })
-    }} />
+    return <Login apps={session.apps} onSignedIn={land} />
+  }
+
+  // The effect above is taking the browser back to the application that sent
+  // it here. There is nothing to show in the meantime.
+  if (next) {
+    return (
+      <div className="signin" style={{ display: 'grid', placeItems: 'center' }}>
+        <span className="muted">Signing you in…</span>
+      </div>
+    )
   }
 
   return (
