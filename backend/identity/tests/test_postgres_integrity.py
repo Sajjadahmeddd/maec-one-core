@@ -359,6 +359,51 @@ def test_two_sessions_racing_to_consume_one_code_get_exactly_one_row(pg):
     assert sorted(won) == [False] * 7 + [True]
 
 
+def test_eight_exchanges_racing_through_the_token_endpoint_yield_one_token(pg):
+    """The same guarantee through the whole endpoint — client verification,
+    consume, claims, signing — with eight requests released at once, each on
+    its own pooled connection.
+
+    It lives here, not beside the other token tests, because SQLite cannot run
+    it: the unit suite shares one connection across threads, and two request
+    threads interleaving on it failed inside the driver about one run in six
+    ("bad parameter or other API misuse") — the test setup failing, not the
+    endpoint. Found in Prompt 6."""
+    import threading
+
+    from fastapi.testclient import TestClient
+
+    from backend.identity import oauth
+    from backend.main import app
+
+    redirect = "https://endpoint-race.invalid/cb"
+    with pg.session_factory()() as session:
+        client, secret = oauth.register_client(
+            session, application_key="engineering", name="Endpoint race",
+            redirect_uris=[redirect])
+        admin = user(session, "admin@mirageaec.com")
+        code = oauth.mint_code(session, client=client, user=admin, redirect_uri=redirect,
+                               nonce="n", state="s")
+        session.commit()
+        client_id = client.client_id
+
+    barrier, statuses = threading.Barrier(8), []
+
+    def attempt():
+        server = TestClient(app)
+        barrier.wait()
+        statuses.append(server.post("/oauth/token", data={
+            "grant_type": "authorization_code", "code": code, "redirect_uri": redirect,
+            "client_id": client_id, "client_secret": secret}).status_code)
+
+    threads = [threading.Thread(target=attempt) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(statuses) == [200] + [400] * 7
+
+
 def test_the_oidc_migration_round_trips_with_rows_present(pg):
     """Up, down and up again, with rows in the new tables and the old ones —
     so the downgrade is known to work on a database that has been used, not

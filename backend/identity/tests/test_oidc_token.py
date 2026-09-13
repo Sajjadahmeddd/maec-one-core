@@ -4,12 +4,17 @@ Server-to-server: no browser, no cookie, no CSRF. A client proves who it is
 with its secret, redeems a code once, and receives a signed token carrying
 the inputs to the permission decision for its own application. Most of these
 tests are about the exchanges that must yield nothing.
+
+The concurrency guarantees — two exchanges racing for one code — are proven
+in test_postgres_integrity.py, not here. This suite runs on SQLite through a
+single shared connection, and two request threads interleaving on it fail
+inside the driver ("bad parameter or other API misuse"), which says nothing
+about the endpoint.
 """
 
 from __future__ import annotations
 
 import base64
-import threading
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, quote, urlsplit
 
@@ -149,27 +154,6 @@ def test_a_code_is_single_use(engineer_client, app_client, et):
     code = _code(engineer_client, client)
     assert exchange(app_client, client.client_id, secret, code).status_code == 200
     _refused(exchange(app_client, client.client_id, secret, code))
-
-
-def test_two_exchanges_racing_for_one_code_yield_exactly_one_token(
-        engineer_client, app_client, et):
-    """The consume is one conditional UPDATE, never a read then a write. The
-    real concurrency proof is against PostgreSQL in test_postgres_integrity;
-    this one races two requests through the whole endpoint."""
-    client, secret = et
-    code = _code(engineer_client, client)
-    barrier, results = threading.Barrier(2), []
-
-    def attempt():
-        barrier.wait()
-        results.append(exchange(app_client, client.client_id, secret, code).status_code)
-
-    threads = [threading.Thread(target=attempt) for _ in range(2)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-    assert sorted(results) == [200, 400]
 
 
 def test_a_code_expires_at_thirty_seconds(engineer_client, app_client, et, monkeypatch):
