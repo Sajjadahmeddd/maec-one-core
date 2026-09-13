@@ -1,11 +1,14 @@
-"""The permission engine.
+"""The permission engine, as Core runs it: from rows.
 
     can(db, user, "engineering:hapext:convert", scope=("project", "P-2291"))
 
-resolves in five steps — entitlement, collect roles, filter by scope,
-resolve most-specific-wins with deny beating allow on a tie, then tool rules
-that may only take away — and any error at any step is a refusal. Nothing
-here defaults to allow.
+`can()` loads everything a decision reads (`load`) and hands it to
+`resolution.resolve`, which runs the five steps — entitlement, collect roles,
+filter by scope, most-specific-wins with deny beating allow on a tie, then
+tool rules that may only take away — with no database in sight. A product
+runs the same `resolve` over a token's claims. One engine, two sources
+(OPEN-DECISIONS #11). Any error at any step is a refusal; nothing here
+defaults to allow.
 
 Also here: the FastAPI dependencies that put the engine in front of a route,
 the version bump that makes a change bite within seconds, and the audit
@@ -15,10 +18,8 @@ session and the same failure posture.
 
 from __future__ import annotations
 
-import logging
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
@@ -27,35 +28,17 @@ from sqlalchemy.orm import Session
 from . import security
 from .db import get_db
 from .models import (
-    Application, AuditLog, Organization, Permission, RolePermission,
+    Application, AuditLog, Organization, Permission, Role, RolePermission,
     Subscription, ToolRule, User, UserLicense, UserRole,
+)
+# The resolution moved to resolution.py so a product can import it without a
+# database. Its names have always been importable from here, and still are.
+from .resolution import (  # noqa: F401  (re-exported)
+    HIDES_FROM_NAV, LEVEL_IMPLIES, SPECIFICITY, _LEVEL_ALLOWS, Grant,
+    ResolutionInput, _utc, app_of, fail_closed, now, resolve, split_key,
 )
 
 GLOBAL_ADMIN = "global_admin"
-
-log = logging.getLogger("maec.identity")
-
-
-def fail_closed(where: str, exc: BaseException) -> None:
-    """Record that a refusal was caused by an error, not by a rule.
-
-    Every `except` in this module answers False, which is the right answer —
-    an engine that cannot read its own data must not guess. But refusing
-    silently makes a total outage indistinguishable from ordinary denial:
-    a dropped connection, a migration mid-flight and a typo'd attribute all
-    reach the user as "Sign in required", and the logs say nothing at all.
-    These are the most load-bearing except blocks in the service and they
-    were the quietest. Fail closed, and be loud about it.
-
-    Only the first line of the message is kept, deliberately. SQLAlchemy
-    appends `[SQL: ...]` and `[parameters: ...]` after a newline, and those
-    carry whatever was bound into the statement — an address, a password
-    hash. The first line is the driver's own reason, which is the part worth
-    having and the part that is safe to write down.
-    """
-    reason = (str(exc).splitlines() or [""])[0].strip()[:200]
-    log.warning("identity: %s failed closed — %s: %s",
-                where, type(exc).__name__, reason)
 
 # What an audit row records when there is genuinely nobody to name: a login
 # attempt that supplied no address at all. Every other path has an actor.
@@ -66,91 +49,6 @@ def fail_closed(where: str, exc: BaseException) -> None:
 # removal fixed. The column is NOT NULL; this is what makes that possible.
 # It cannot collide with a real address: it has no "@".
 ANONYMOUS_ACTOR = "(anonymous)"
-
-# Higher number: more specific. Most specific wins.
-SPECIFICITY = {"platform": 1, "organization": 2, "application": 3, "project": 4}
-
-# What each level implies a role must already allow. The write path in
-# admin_tools refuses a rule that promises more than the role grants.
-#
-# For the two levels that restrict — `edit` and `view` — this is also exactly
-# what they permit at enforcement. `_LEVEL_ALLOWS` below derives from it rather
-# than restating it, because the two tables once disagreed: `edit` omitted
-# configure here and permitted it there, so an administrator who set `edit` to
-# take configuration away got no change and no warning.
-LEVEL_IMPLIES: dict[str, frozenset[str]] = {
-    "full": frozenset({"view", "convert", "export", "configure"}),
-    "edit": frozenset({"view", "convert", "export"}),
-    "view": frozenset({"view"}),
-    "hidden": frozenset(),
-    "no_access": frozenset(),
-}
-
-
-def _permits_only_what_it_implies(level: str) -> Callable[[str], bool]:
-    listed = LEVEL_IMPLIES[level]
-    return lambda action: action in listed
-
-
-# What each tool-rule level still permits. A rule can only ever narrow what
-# the role already allowed — nothing here can turn a denial into a grant,
-# which is structural rather than a check: this runs after the role has
-# already decided, and it can only subtract.
-#
-# Three levels are special and stay explicit:
-#
-#   full       every action, including one added to the registry later. Not
-#              derived from LEVEL_IMPLIES on purpose: that lists today's four
-#              actions for the write-path check, and a module gaining a fifth
-#              must not have its full-access rules quietly start refusing it.
-#   hidden     the module is not offered in the navigation, but the API still
-#              answers. Decluttering, not a boundary. Anyone who knows the
-#              URL can still call it — which is the point: it is for tools a
-#              team simply does not use, not for tools they must not reach.
-#   no_access  the API refuses. This is the security boundary.
-#
-# `hidden` and `no_access` are NOT the same thing, and collapsing them is the
-# mistake this table exists to prevent. `hidden` permits here and is filtered
-# in the navigation; `no_access` denies.
-_LEVEL_ALLOWS: dict[str, Callable[[str], bool]] = {
-    "full": lambda action: True,
-    "edit": _permits_only_what_it_implies("edit"),
-    "view": _permits_only_what_it_implies("view"),
-    "hidden": lambda action: True,        # UX only — see above
-    "no_access": lambda action: False,    # the boundary
-}
-
-# Levels that take a module out of the navigation, whatever the API does.
-#
-# Core renders no module navigation — its launcher shows applications — so the
-# reader of this is the product's own navigation. Under the token design the
-# product receives the organisation's tool rules for its application and
-# applies this set itself. See OPEN-DECISIONS #3.
-HIDES_FROM_NAV = frozenset({"hidden", "no_access"})
-
-
-def now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _utc(value: datetime | None) -> datetime | None:
-    """SQLite hands back naive datetimes; treat them as UTC."""
-    if value is not None and value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value
-
-
-# ------------------------------------------------------------- the key
-def split_key(permission_key: str) -> tuple[str, str, str]:
-    """`app:module:action`, or ValueError. Three parts, no more, no less."""
-    parts = permission_key.split(":")
-    if len(parts) != 3 or not all(parts):
-        raise ValueError(f"malformed permission key {permission_key!r}")
-    return parts[0], parts[1], parts[2]
-
-
-def app_of(permission_key: str) -> str:
-    return split_key(permission_key)[0]
 
 
 # ----------------------------------------------------------- entitlement
@@ -206,26 +104,6 @@ def active_roles(db: Session, user: User) -> list[UserRole]:
     return [r for r in rows if r.expires_at is None or _utc(r.expires_at) > moment]
 
 
-def _covers(grant: UserRole, user: User, app_key: str,
-            requested: tuple[str, str | None]) -> bool:
-    """Does this grant's scope reach the requested one?
-
-    platform reaches everything. organization reaches everything in that
-    organisation. application reaches that application and any project
-    request made within it. project reaches that one project.
-    """
-    kind, ident = requested
-    if grant.scope_type == "platform":
-        return True
-    if grant.scope_type == "organization":
-        return grant.scope_id == str(user.org_id)
-    if grant.scope_type == "application":
-        return grant.scope_id == app_key
-    if grant.scope_type == "project":
-        return kind == "project" and ident is not None and grant.scope_id == ident
-    return False
-
-
 def holds_business_admin(db: Session, user: User) -> bool:
     """Does this person lead any application, in a live organisation?
 
@@ -258,83 +136,75 @@ def is_global_admin(db: Session, user: User) -> bool:
         return False
 
 
-# ------------------------------------------------------------------ can()
+# ---------------------------------------------------------- load(), can()
+def load(db: Session, user: User, app_key: str) -> ResolutionInput:
+    """Everything this person's decisions about one application read.
+
+    The same tables `can()` has always read — the application, the
+    organisation, the subscription, the seat, the grants and their roles, the
+    role permissions, the tool rules — gathered in one pass instead of one
+    query per grant. The token endpoint builds its claims from this, so a
+    token carries exactly what `can()` would have decided from.
+
+    Raises on a database error. `can()` fails closed around it; the token
+    endpoint refuses to mint.
+    """
+    org_id = str(user.org_id)
+    app = db.scalar(select(Application).where(Application.key == app_key))
+    if app is None or not entitled(db, user, app_key):
+        return ResolutionInput(app_key=app_key, org_id=org_id, entitled=False)
+
+    entitled_until = _utc(db.scalar(select(Subscription.valid_to).where(
+        Subscription.org_id == user.org_id,
+        Subscription.application_id == app.id)))
+
+    moment = now()
+    grants = tuple(
+        Grant(role_id=str(grant.role_id), role_key=role_key,
+              scope_type=grant.scope_type, scope_id=grant.scope_id,
+              expires_at=_utc(grant.expires_at))
+        for grant, role_key in db.execute(
+            select(UserRole, Role.key)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(UserRole.user_id == user.id)).all()
+        if grant.expires_at is None or _utc(grant.expires_at) > moment
+    )
+
+    role_ids = {uuid.UUID(g.role_id) for g in grants}
+    role_permissions: dict[tuple[str, str], str] = {}
+    tool_rules: dict[tuple[str, str], str] = {}
+    if role_ids:
+        for role_id, key, effect in db.execute(
+                select(RolePermission.role_id, Permission.key, RolePermission.effect)
+                .join(Permission, Permission.id == RolePermission.permission_id)
+                .where(RolePermission.role_id.in_(role_ids),
+                       Permission.application_id == app.id)).all():
+            role_permissions[(str(role_id), key)] = effect
+        for module_key, role_id, level in db.execute(
+                select(ToolRule.module_key, ToolRule.role_id, ToolRule.access_level)
+                .where(ToolRule.org_id == user.org_id,
+                       ToolRule.application_id == app.id,
+                       ToolRule.role_id.in_(role_ids))).all():
+            tool_rules[(module_key, str(role_id))] = level
+
+    return ResolutionInput(
+        app_key=app_key, org_id=org_id, entitled=True,
+        entitled_until=entitled_until, grants=grants,
+        role_permissions=role_permissions, tool_rules=tool_rules,
+    )
+
+
 def can(db: Session, user: User | None, permission_key: str,
         scope: tuple[str, str | None] | None = None) -> bool:
-    """May this person do this thing, here? False on any doubt."""
+    """May this person do this thing, here? False on any doubt.
+
+    Load, then resolve. The resolution is `resolution.resolve` — the same
+    function a product runs over a token's claims.
+    """
     try:
         if user is None or user.status != "active":
             return False
-        app_key, module_key, action = split_key(permission_key)
-
-        # 1. entitlement
-        if not entitled(db, user, app_key):
-            return False
-
-        # 2. + 3. roles in force whose scope reaches the request
-        requested = scope or ("application", app_key)
-        if requested[0] not in SPECIFICITY:
-            return False
-        grants = [g for g in active_roles(db, user)
-                  if _covers(g, user, app_key, requested)]
-        if not grants:
-            return False
-
-        # 4. resolve: most specific wins; deny beats allow on a tie
-        permission = db.scalar(select(Permission).where(Permission.key == permission_key))
-        if permission is None:
-            return False
-        matches: list[tuple[int, str, UserRole]] = []
-        for grant in grants:
-            rp = db.scalar(select(RolePermission).where(
-                RolePermission.role_id == grant.role_id,
-                RolePermission.permission_id == permission.id))
-            if rp is not None:
-                matches.append((SPECIFICITY[grant.scope_type], rp.effect, grant))
-        if not matches:
-            return False
-        top = max(spec for spec, _, _ in matches)
-        decisive = [(effect, grant) for spec, effect, grant in matches if spec == top]
-        if any(effect == "deny" for effect, _ in decisive):
-            return False
-        allowing = [grant for effect, grant in decisive if effect == "allow"]
-        if not allowing:
-            return False
-
-        # 5. tool rules may narrow what the winning roles allowed, never widen
-        #
-        # Decided, not incidental: when two roles tie at the top specificity
-        # and both allow, a no_access tool rule on EITHER of them refuses.
-        # The restrictive rule wins even though the other role carries no
-        # restriction at all.
-        #
-        # The cost of that is real and worth naming, because it will be
-        # reported as a bug one day: someone with full access to a module,
-        # later also granted a role that is restricted from it at the same
-        # scope, LOSES access by gaining a role. See
-        # test_a_no_access_rule_on_one_tied_role_refuses_for_both.
-        #
-        # It is decided this way because the step immediately above already
-        # settles a tie the same direction — deny beats allow at equal
-        # specificity — and an engine whose two tie-breaks disagree is worse
-        # than one whose single tie-break is occasionally surprising. The
-        # coherent alternative is "allow if any tied grant survives its own
-        # rule", which reads tool rules as narrowing the grant they attach to
-        # rather than the request; it is written up in OPEN-DECISIONS.md.
-        # Either is defensible. Only being undecided is not.
-        app = db.scalar(select(Application).where(Application.key == app_key))
-        for grant in allowing:
-            rule = db.scalar(select(ToolRule).where(
-                ToolRule.org_id == user.org_id,
-                ToolRule.application_id == app.id,
-                ToolRule.module_key == module_key,
-                ToolRule.role_id == grant.role_id))
-            if rule is None:
-                continue
-            allows = _LEVEL_ALLOWS.get(rule.access_level)
-            if allows is None or not allows(action):
-                return False
-        return True
+        return resolve(load(db, user, app_of(permission_key)), permission_key, scope)
     except Exception as exc:
         fail_closed('can', exc)
         return False

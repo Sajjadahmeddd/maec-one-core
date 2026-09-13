@@ -105,18 +105,20 @@ def test_the_log_line_stops_before_the_bound_parameters(caplog):
 
 
 def test_every_fail_closed_handler_names_itself():
-    """Six handlers, six distinct names — a log line that cannot say which
+    """Seven handlers, seven distinct names — a log line that cannot say which
     of them fired is only marginally better than no log line.
 
-    `organization_active` joined in Prompt 5 (OPEN-DECISIONS #14). A new
-    handler failing this test first is the test doing its job: the set is
-    pinned so each addition is named deliberately."""
+    `organization_active` joined in Prompt 5 (OPEN-DECISIONS #14), and
+    `resolve` in Prompt 6, when the resolution moved to resolution.py so a
+    product can run it without a database. A new handler failing this test
+    first is the test doing its job: the set is pinned so each addition is
+    named deliberately."""
     import inspect as _inspect
 
-    from backend.identity import guard
+    from backend.identity import guard, resolution
 
     named = set()
-    for module in (permissions, guard):
+    for module in (permissions, guard, resolution):
         source = Path(module.__file__).read_text(encoding="utf-8")
         for line in source.splitlines():
             if "fail_closed(" in line and "def fail_closed" not in line:
@@ -124,5 +126,5 @@ def test_every_fail_closed_handler_names_itself():
                 if argument.startswith(("'", '"')):
                     named.add(argument[1:argument.index(argument[0], 1)])
     assert named == {"organization_active", "entitled", "holds_business_admin",
-                     "is_global_admin", "can", "guard.inspect"}
+                     "is_global_admin", "can", "resolve", "guard.inspect"}
     assert _inspect.signature(permissions.fail_closed).parameters.keys() == {"where", "exc"}

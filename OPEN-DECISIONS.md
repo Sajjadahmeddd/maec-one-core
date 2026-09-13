@@ -423,10 +423,27 @@ identity store, which the topology says applications must never touch. Every
 further application repeats both costs.
 
 **Rejected — (b2) the token carries the answer.** Core resolves and emits an
-effective allow-set. The token is small and the product code trivial, but the
-product can no longer resolve at a scope it learns at request time — a project
-id in a URL (#4) — and the tie-break rules (#12) would live on one side only.
-That is two engines, one of them degenerate.
+effective allow-set. The product code would be trivial, and it fails twice:
+
+* **It cannot resolve at a scope learned at request time.** Core resolves
+  before it knows which project a request concerns. A Business Admin allocates
+  projects and a Project Lead runs one, so a project id in a URL is a planned
+  requirement, not a hypothetical (#4). b2 works today only because nothing
+  yet passes a scope other than the default.
+* **It is two engines, one of them degenerate.** Deny beats allow, most
+  specific wins, tool rules only narrow, and the equal-specificity decision in
+  #12 would all live on Core's side only — the thing this entry pre-committed
+  against.
+
+**Token size is not the objection people expect.** Measured against the local
+database in Prompt 6, for today's seeded Global Admin and engineer — one grant,
+16 role permissions, no tool rules — the claims are a 1.2 KB payload and the
+signed token 2.05 KB. A heavy but plausible person — four roles, every
+engineering permission on each, a tool rule on every module for every role —
+is a 5.2 KB payload and a 7.3 KB signed token. That last figure is over a
+browser's 4 KB cookie limit, which is exactly why the product holds the token
+server-side in its own session and never in a cookie. Held there, size does
+not matter.
 
 **Decided — (b1) the token carries the inputs.** For its audience application
 only:
