@@ -462,3 +462,60 @@ atomicity does. A caller that needs the record writes it after its rollback.
 **Noticed, not changed:** clearing a tool rule does not bump its holders'
 `permissions_version`, though setting one does. Harmless today — nothing reads
 the version — but it will matter the day a token carries it.
+
+---
+
+## 14. A suspended organisation holds nothing — decided
+
+**Status:** decided and enforced in Prompt 5. Before it, `organizations.status`
+had a CHECK permitting `suspended` and no reader anywhere, so suspending a
+tenant did nothing at all.
+
+| Who, in a suspended organisation | Applications | Admin panel | Sign in |
+|---|---|---|---|
+| any member | none | — | yes, to a launcher that says why |
+| Business Admin | none | **refused** — the audit-read exception is tenant-scoped | yes |
+| Global Admin | none | **kept** | yes |
+
+**Enforced in** `permissions.organization_active()`, which is read by:
+
+* `entitled()`, before the subscription window — so `can()` and the guard's
+  product block inherit it;
+* `holds_business_admin()` — the guard's audit-read exception;
+* `admin_audit.require_audit_reader` — the endpoint's own second check, which
+  now asks the guard's question rather than restating it;
+* `router_auth._apps_payload`, which resolves entitlement in bulk for
+  `/api/auth/me` and would otherwise disagree with `entitled()`.
+
+It bites on the next request, by the same per-request re-read that makes a
+person's suspension immediate. No migration: the column and its CHECK already
+existed.
+
+**Why the Global Admin keeps the panel.** It is a platform role, not a tenant
+one — the seed describes it as spanning every organisation — and it is the
+person who would restore the account. Locking them out of the only place that
+could do it is the foot-gun. They lose the applications like everyone else,
+because entitlement is the commercial lever, and holding a platform role does
+not make a suspended tenant's access paid for.
+
+**Why members can still sign in.** The login endpoint deliberately says nothing
+about *why* a sign-in failed, so refusing it would tell someone whose
+organisation's access lapsed that their password is wrong. Signed in, they get
+an empty launcher with one line saying the organisation is suspended.
+
+**Nothing is removed.** Subscriptions stay in date, seats stay assigned, roles
+stay granted. Setting `status = 'active'` restores everything on the next
+request.
+
+**For the token (b1):** organisation status is an input to `entitled()`, so it
+is an input to the decision the token reproduces. The simplest shape is that
+Core refuses to mint a token for a suspended organisation, and the token's
+lifetime bounds how long an already-issued one outlives a suspension.
+
+**Follow-ups, deliberately not built:**
+
+* nothing sets `status = 'suspended'` — there is no admin surface, only SQL;
+* `accounts.assign_license` still assigns seats in a suspended organisation;
+  the seat does nothing until it is restored, but a screen could say so;
+* `can()` and `/api/auth/me` each read one more row, the organisation — once
+  per request, then served from the session's identity map.

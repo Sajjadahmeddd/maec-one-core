@@ -26,7 +26,7 @@ from .models import (
     Application, Organization, Subscription, User, UserLicense,
 )
 from .permissions import (
-    active_roles, audit, current_user, is_global_admin, now,
+    active_roles, audit, current_user, is_global_admin, now, organization_active,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -70,16 +70,23 @@ def _apps_payload(db: Session, user: User | None) -> list[dict]:
     Computed here from subscriptions and seats, never from the client. The
     launcher renders exactly this list.
 
-    Three queries, whatever the number of applications. Calling `entitled()`
+    Four queries, whatever the number of applications. Calling `entitled()`
     once per app read the application, its subscription and the licence each
     time — twenty-two queries for eight apps, on the endpoint every page load
-    hits. The three reads below answer the same question: what exists, what
-    this organisation subscribes to, and which seats this person holds.
+    hits. The reads below answer the same question: what exists, whether the
+    organisation is live, what it subscribes to, and which seats this person
+    holds. The organisation check is `entitled()`'s own, not a copy of it: this
+    list and the engine must never disagree about what someone may open.
     """
     apps = db.scalars(select(Application).order_by(Application.name)).all()
     out = [{"key": a.key, "name": a.name, "description": a.description,
             "status": a.status, "base_url": a.base_url} for a in apps]
     if user is None:
+        return out
+
+    if not organization_active(db, user):
+        for item in out:
+            item["entitled"] = False
         return out
 
     moment = now()
@@ -118,6 +125,9 @@ def _me_payload(request: Request, db: Session, user: User) -> dict:
         # guard refuses everything else until it clears — the flag is not the
         # enforcement, it is the explanation for it.
         "must_change_password": user.must_change_password,
+        # Explains an empty launcher. Not the enforcement — entitled() is —
+        # and read from the same function, so the two cannot disagree.
+        "organization_suspended": not organization_active(db, user),
         "apps": _apps_payload(db, user),
         "csrf_token": security.csrf_token(request),
     }

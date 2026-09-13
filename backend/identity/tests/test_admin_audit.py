@@ -298,6 +298,57 @@ def test_a_business_admin_cannot_write_anywhere_under_admin(lead_client):
     assert r.status_code == 403
 
 
+# ----------------------------------- a suspended organisation (OPEN-DECISIONS #14)
+def _suspend_the_organisation(db):
+    org = db_user(db, ADMIN_EMAIL).org
+    org.status = "suspended"
+    db.commit()
+
+
+def test_a_suspended_organisations_lead_loses_the_audit_reads(lead_client, db):
+    """A Business Admin's reach is tenant-scoped, and the tenant is suspended."""
+    assert lead_client.get(AUDIT).status_code == 200
+    _suspend_the_organisation(db)
+    for path in (AUDIT, f"{AUDIT}/stats", f"{AUDIT}/export", f"{AUDIT}/controls"):
+        assert lead_client.get(path).status_code == 403, path
+
+
+def test_the_endpoints_own_check_refuses_a_suspended_lead(business_admin, db):
+    """The second lock, without the guard in front of it: the refusal above
+    must not depend on the door alone."""
+    from fastapi import HTTPException
+    from backend.identity.admin_audit import require_audit_reader
+    _suspend_the_organisation(db)
+    with pytest.raises(HTTPException) as refused:
+        require_audit_reader(None, business_admin, db)
+    assert refused.value.status_code == 403
+
+
+def test_a_suspended_organisations_global_admin_keeps_the_panel(admin_client, db):
+    """Global Admin is a platform role, and the person who would restore the
+    account. Locking them out of the only place that can do it is the
+    foot-gun. They lose the applications, like everyone in the organisation."""
+    _suspend_the_organisation(db)
+    assert admin_client.get("/api/admin/whoami").status_code == 200
+    assert admin_client.get(AUDIT).status_code == 200
+    me = admin_client.get("/api/auth/me").json()
+    assert not any(app["entitled"] for app in me["apps"])
+    assert me["organization_suspended"] is True
+
+
+def test_a_suspended_organisations_members_still_sign_in_to_an_explanation(
+        app_client, engineer_credentials, db):
+    """Refusing sign-in would mean the generic failure — "incorrect password"
+    — for someone whose organisation's access lapsed. Signed in, the launcher
+    can say why it is empty."""
+    _suspend_the_organisation(db)
+    r = app_client.post("/api/auth/login", json=engineer_credentials)
+    assert r.status_code == 200
+    body = r.json()
+    assert not any(app["entitled"] for app in body["apps"])
+    assert body["organization_suspended"] is True
+
+
 # ---------------------------------------------------- the floor holds
 def test_an_ordinary_engineer_is_refused(engineer_client):
     for path in (AUDIT, f"{AUDIT}/stats", f"{AUDIT}/export", f"{AUDIT}/controls"):

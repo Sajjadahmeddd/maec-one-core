@@ -34,7 +34,8 @@ from . import config, security
 from .db import get_db
 from .models import Application, AuditLog, User
 from .permissions import (
-    ANONYMOUS_ACTOR, active_roles, is_global_admin, require_user,
+    ANONYMOUS_ACTOR, active_roles, holds_business_admin, is_global_admin,
+    require_user,
 )
 from . import router_auth
 
@@ -63,12 +64,17 @@ def require_audit_reader(request: Request, user: User = Depends(require_user),
     The guard admits Business Admins to GETs under /api/admin/audit and
     nothing else; this is the second, independent check, the way
     require_global_admin is elsewhere.
+
+    It asks the guard's own question, `holds_business_admin`, rather than
+    restating it — so a suspended organisation's lead is refused here as well
+    as at the door. Their reach is tenant-scoped and the tenant is suspended.
+    A Global Admin is a platform role and keeps the panel, to restore the
+    account. OPEN-DECISIONS #14.
     """
     if is_global_admin(db, user):
         return user
-    for grant in active_roles(db, user):
-        if grant.role.key == BUSINESS_ADMIN:
-            return user
+    if holds_business_admin(db, user):
+        return user
     raise HTTPException(status_code=403, detail="Global Admin only.")
 
 

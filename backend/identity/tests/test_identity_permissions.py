@@ -104,6 +104,36 @@ def test_an_app_with_no_subscription_refuses(db):
     assert can(db, admin, "timesheet:sheet:view") is False
 
 
+def test_an_active_organisation_with_a_subscription_and_a_seat_is_entitled(db):
+    engineer = user(db, ENGINEER_EMAIL)
+    assert engineer.org.status == "active"
+    assert permissions.entitled(db, engineer, "engineering") is True
+    assert permissions.organization_active(db, engineer) is True
+
+
+def test_a_suspended_organisation_holds_nothing(db):
+    """Suspension is the commercial lever, and it bites on the next check.
+
+    The subscription stays in date and the seats stay assigned — nothing is
+    removed, which is why restoring the organisation restores everything.
+    The Global Admin loses the application too: entitlement is commercial,
+    and a platform role does not make a suspended tenant's access paid for.
+    """
+    engineer, admin = user(db, ENGINEER_EMAIL), user(db, ADMIN_EMAIL)
+    org = engineer.org
+    org.status = "suspended"
+    db.commit()
+    for person in (engineer, admin):
+        assert permissions.entitled(db, person, "engineering") is False
+        assert can(db, person, CONVERT) is False
+        assert permissions.organization_active(db, person) is False
+    assert is_global_admin(db, admin) is True            # the role itself is untouched
+
+    org.status = "active"
+    db.commit()
+    assert can(db, engineer, CONVERT) is True
+
+
 # ----------------------------------------------------------------- roles
 def test_an_expired_role_counts_for_nothing(db):
     engineer = user(db, ENGINEER_EMAIL)

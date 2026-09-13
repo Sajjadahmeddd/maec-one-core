@@ -77,7 +77,12 @@ export default function Launcher({ session, onOpen, onAdmin, onSignOut }) {
         })}
       </ul>
 
-      {open.length === 0 && (
+      {session?.organization_suspended ? (
+        <p className="launch-soon">
+          Your organisation&apos;s access to MAEC One is suspended, so no
+          application can be opened. Your administrator can tell you more.
+        </p>
+      ) : open.length === 0 && (
         <p className="launch-soon">
           You do not have a seat on any application yet. Ask your
           administrator to assign one.

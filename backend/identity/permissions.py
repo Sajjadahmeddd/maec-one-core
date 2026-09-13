@@ -27,8 +27,8 @@ from sqlalchemy.orm import Session
 from . import security
 from .db import get_db
 from .models import (
-    Application, AuditLog, Permission, RolePermission, Subscription,
-    ToolRule, User, UserLicense, UserRole,
+    Application, AuditLog, Organization, Permission, RolePermission,
+    Subscription, ToolRule, User, UserLicense, UserRole,
 )
 
 GLOBAL_ADMIN = "global_admin"
@@ -154,11 +154,31 @@ def app_of(permission_key: str) -> str:
 
 
 # ----------------------------------------------------------- entitlement
+def organization_active(db: Session, user: User) -> bool:
+    """Is this person's organisation live?
+
+    A suspended organisation keeps its data and its people can still sign
+    in, but it holds nothing: no application, and no tenant-scoped privilege.
+    Read on every check, so a suspension bites on the next request — the same
+    re-read that makes suspending a person immediate. OPEN-DECISIONS #14.
+    """
+    try:
+        org = db.get(Organization, user.org_id)
+        return org is not None and org.status == "active"
+    except Exception as exc:
+        fail_closed('organization_active', exc)
+        return False
+
+
 def entitled(db: Session, user: User, app_key: str) -> bool:
-    """Org subscribed, in date, and this person holds a seat."""
+    """Org live, subscribed and in date, and this person holds a seat."""
     try:
         app = db.scalar(select(Application).where(Application.key == app_key))
         if app is None:
+            return False
+        # A suspended organisation holds nothing, whatever it has paid for.
+        # Checked before the subscription so the reason is the first one found.
+        if not organization_active(db, user):
             return False
         sub = db.scalar(select(Subscription).where(
             Subscription.org_id == user.org_id,
@@ -207,12 +227,16 @@ def _covers(grant: UserRole, user: User, app_key: str,
 
 
 def holds_business_admin(db: Session, user: User) -> bool:
-    """Does this person lead any application at all?
+    """Does this person lead any application, in a live organisation?
 
     Used by the guard to decide whether to let them as far as the audit
-    reads; what they may then *see* is scoped by the endpoint.
+    reads, and by the audit endpoint's own check; what they may then *see* is
+    scoped by the endpoint. The role's reach is tenant-scoped, so a suspended
+    organisation's lead holds nothing. OPEN-DECISIONS #14.
     """
     try:
+        if not organization_active(db, user):
+            return False
         return any(g.role.key == "business_admin" for g in active_roles(db, user))
     except Exception as exc:
         fail_closed('holds_business_admin', exc)
@@ -220,6 +244,10 @@ def holds_business_admin(db: Session, user: User) -> bool:
 
 
 def is_global_admin(db: Session, user: User) -> bool:
+    # Deliberately not conditioned on the organisation's status. Global Admin
+    # is a platform role and the person who would restore a suspended
+    # organisation: they lose its applications through entitled(), not the
+    # panel through this. OPEN-DECISIONS #14.
     try:
         for grant in active_roles(db, user):
             if grant.scope_type == "platform" and grant.role.key == GLOBAL_ADMIN:

@@ -105,8 +105,12 @@ def test_the_log_line_stops_before_the_bound_parameters(caplog):
 
 
 def test_every_fail_closed_handler_names_itself():
-    """Five handlers, five distinct names — a log line that cannot say which
-    of them fired is only marginally better than no log line."""
+    """Six handlers, six distinct names — a log line that cannot say which
+    of them fired is only marginally better than no log line.
+
+    `organization_active` joined in Prompt 5 (OPEN-DECISIONS #14). A new
+    handler failing this test first is the test doing its job: the set is
+    pinned so each addition is named deliberately."""
     import inspect as _inspect
 
     from backend.identity import guard
@@ -119,6 +123,6 @@ def test_every_fail_closed_handler_names_itself():
                 argument = line.split("fail_closed(", 1)[1]
                 if argument.startswith(("'", '"')):
                     named.add(argument[1:argument.index(argument[0], 1)])
-    assert named == {"entitled", "holds_business_admin", "is_global_admin",
-                     "can", "guard.inspect"}
+    assert named == {"organization_active", "entitled", "holds_business_admin",
+                     "is_global_admin", "can", "guard.inspect"}
     assert _inspect.signature(permissions.fail_closed).parameters.keys() == {"where", "exc"}
