@@ -6,23 +6,26 @@ route registered after the catch-all would be answered with index.html and a
 200 — a green status on a broken endpoint. What each path requires is
 declared in guard.ROUTES, like every other route.
 
-The rules — clients, redirect targets, codes — live in oauth.py. This module
-translates HTTP to them and back.
+The rules — clients, redirect targets, codes — live in oauth.py, and the
+token's claims in tokens.py. This module translates HTTP to them and back.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 from html import escape
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote_plus, urlencode, urlsplit, urlunsplit
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
-from . import keys, oauth
+from . import keys, oauth, tokens
 from .db import get_db
 from .models import User
 from .permissions import audit, entitled, require_user
+from .resolution import now
 
 router = APIRouter(tags=["oidc"])
 
@@ -36,6 +39,8 @@ JWKS_MAX_AGE = 300
 # The widths of the columns these are stored in.
 MAX_STATE = 500
 MAX_NONCE = 255
+
+NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
 
 @router.get("/.well-known/jwks.json")
@@ -166,3 +171,108 @@ def authorize(request: Request, db: Session = Depends(get_db),
           result="success", request=request, commit=False)
     db.commit()
     return _back_to_client(redirect_uri, code=code, state=state)
+
+
+# -------------------------------------------------------------------- token
+def _basic_credentials(header: str) -> tuple[str, str] | None:
+    """client_id and secret from an HTTP Basic header, or None if none was sent.
+
+    RFC 6749 §2.3.1 form-encodes both before base64. A malformed header is not
+    None: it authenticates as nobody, so it still costs one verification.
+    """
+    scheme, _, value = header.partition(" ")
+    if scheme.lower() != "basic" or not value.strip():
+        return None
+    try:
+        decoded = base64.b64decode(value.strip(), validate=True).decode("utf-8")
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return "", ""
+    client_id, separator, secret = decoded.partition(":")
+    if not separator:
+        return "", ""
+    return unquote_plus(client_id), unquote_plus(secret)
+
+
+def _token_error(error: str, status: int = 400, *, basic: bool = False) -> JSONResponse:
+    headers = dict(NO_STORE)
+    if status == 401 and basic:
+        headers["WWW-Authenticate"] = 'Basic realm="MAEC One"'
+    return JSONResponse({"error": error}, status_code=status, headers=headers)
+
+
+@router.post("/oauth/token")
+def token(request: Request, db: Session = Depends(get_db),
+          grant_type: str = Form(""), code: str = Form(""),
+          redirect_uri: str = Form(""), client_id: str = Form(""),
+          client_secret: str = Form("")):
+    """Redeem a code, once, for a signed token. Server-to-server only.
+
+    No session is read and no CSRF header is asked for: the caller is a
+    product's backend, which proves who it is with its client secret.
+    """
+    basic = _basic_credentials(request.headers.get("authorization", ""))
+    if basic is not None:
+        if client_secret:
+            # RFC 6749 §2.3: one authentication method per request.
+            return _token_error("invalid_request")
+        client_id, client_secret = basic
+
+    def refuse(error: str, reason: str, *, status: int = 400, actor: User | None = None,
+               application_id=None) -> JSONResponse:
+        audit(db, actor=actor, action="oauth.token", target_type="oauth_client",
+              target_id=client_id or None, application_id=application_id,
+              result="blocked", request=request, after={"error": error, "reason": reason})
+        return _token_error(error, status, basic=basic is not None)
+
+    # 1. The calling service. Constant work: an unknown client id costs the
+    #    same argon2 verification as a wrong secret.
+    client = oauth.authenticate_client(db, client_id, client_secret)
+    if client is None:
+        return refuse("invalid_client", "client authentication failed", status=401)
+    application = client.application
+
+    if grant_type != "authorization_code":
+        return refuse("unsupported_grant_type", f"grant_type {grant_type[:40]!r}",
+                      application_id=application.id)
+
+    # 2. The code, consumed in one statement and committed at once: spent now,
+    #    whatever follows.
+    row = oauth.consume_code(db, code, client_id=client.id, redirect_uri=redirect_uri)
+    db.commit()
+    if row is None:
+        reason = oauth.why_not_redeemable(db, code, client_id=client.id,
+                                          redirect_uri=redirect_uri)
+        return refuse("invalid_grant", reason, application_id=application.id)
+
+    # 3. The person, re-checked now. Everything the guard would refuse a
+    #    session for refuses a token too.
+    person = db.get(User, row.user_id)
+    if person is None or person.status != "active" or person.must_change_password:
+        return refuse("invalid_grant", "account not active, or a password change is outstanding",
+                      actor=person, application_id=application.id)
+
+    # 4. Entitlement, re-checked at exchange: a seat revoked since authorize
+    #    means no token. The claims come from load(), the function can() uses.
+    try:
+        claims = tokens.build_claims(db, user=person, application=application,
+                                     client=client, nonce=row.nonce)
+    except tokens.NotEntitled:
+        return refuse("invalid_grant", "no entitlement to this application at exchange",
+                      actor=person, application_id=application.id)
+
+    # 5. Never sign with a key JWKS does not publish.
+    keys.ensure_published(db)
+    access_token = tokens.sign(claims)
+
+    client.last_used_at = now()
+    audit(db, actor=person, action="oauth.token", target_type="oauth_client",
+          target_id=client.client_id, application_id=application.id,
+          result="success", request=request,
+          after={"jti": claims["jti"], "exp": claims["exp"], "pv": claims["pv"]},
+          commit=False)
+    db.commit()
+    return JSONResponse(
+        {"access_token": access_token, "token_type": "Bearer",
+         "expires_in": claims["exp"] - claims["iat"]},
+        headers=NO_STORE,
+    )

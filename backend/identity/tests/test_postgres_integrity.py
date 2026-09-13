@@ -322,6 +322,43 @@ def test_an_authorization_code_hash_is_unique(session):
     session.rollback()
 
 
+def test_two_sessions_racing_to_consume_one_code_get_exactly_one_row(pg):
+    """The single-use guarantee under real concurrency. Two transactions run
+    the conditional UPDATE at the same moment; PostgreSQL row-locks, the
+    second re-checks `consumed_at IS NULL` after the first commits, and
+    changes nothing. SQLite cannot show this; it serialises the whole file."""
+    import threading
+
+    from backend.identity import oauth
+
+    with pg.session_factory()() as session:
+        client, _secret = oauth.register_client(
+            session, application_key="engineering", name="Race",
+            redirect_uris=["https://race.invalid/cb"])
+        admin = user(session, "admin@mirageaec.com")
+        code = oauth.mint_code(session, client=client, user=admin,
+                               redirect_uri="https://race.invalid/cb", nonce="n", state="s")
+        session.commit()
+        client_pk = client.id
+
+    barrier, won = threading.Barrier(2), []
+
+    def attempt():
+        with pg.session_factory()() as session:
+            barrier.wait()
+            row = oauth.consume_code(session, code, client_id=client_pk,
+                                     redirect_uri="https://race.invalid/cb")
+            session.commit()
+            won.append(row is not None)
+
+    threads = [threading.Thread(target=attempt) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(won) == [False] * 7 + [True]
+
+
 def test_the_oidc_migration_round_trips_with_rows_present(pg):
     """Up, down and up again, with rows in the new tables and the old ones —
     so the downgrade is known to work on a database that has been used, not

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import uuid
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -18,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from . import security
 from .models import Application, AuthorizationCode, OAuthClient, User
-from .resolution import now
+from .resolution import _utc, now
 
 # A code lives thirty seconds. It only has to survive one redirect and one
 # server-to-server call; anything longer is time for a leaked code to be used.
@@ -154,16 +155,23 @@ def mint_code(db: Session, *, client: OAuthClient, user: User, redirect_uri: str
     return code
 
 
-def consume_code(db: Session, code: str, *,
+def consume_code(db: Session, code: str, *, client_id: uuid.UUID, redirect_uri: str,
                  at: datetime | None = None) -> AuthorizationCode | None:
     """Mark the code consumed and return it — atomically, or not at all.
 
-    One conditional UPDATE: `consumed_at IS NULL` and not yet expired. Two
-    exchanges racing for one code both run it, and the database lets exactly
-    one of them change the row; the other changes nothing and gets None. No
-    read-then-write. The caller commits straight away, so a code is spent even
-    if everything after this refuses — a code is single-use whether or not the
-    exchange succeeds.
+    One conditional UPDATE: this code, issued to this client for this redirect
+    URI, not consumed and not expired. Two exchanges racing for one code both
+    run it, and the database lets exactly one change the row; the other
+    changes nothing and gets None. No read-then-write.
+
+    The client and redirect URI are conditions of the statement, not checks
+    after it. A client presenting a code issued to another client is refused
+    without spending it — a client with valid credentials cannot burn codes
+    that are not its own.
+
+    The caller commits straight away, so a code is spent even if everything
+    after this refuses: a code is single-use whether or not the exchange
+    succeeds.
     """
     if not code:
         return None
@@ -172,6 +180,8 @@ def consume_code(db: Session, code: str, *,
     changed = db.execute(
         update(AuthorizationCode)
         .where(AuthorizationCode.code_hash == code_hash,
+               AuthorizationCode.oauth_client_id == client_id,
+               AuthorizationCode.redirect_uri == redirect_uri,
                AuthorizationCode.consumed_at.is_(None),
                AuthorizationCode.expires_at > moment)
         .values(consumed_at=moment)
@@ -182,3 +192,23 @@ def consume_code(db: Session, code: str, *,
     row = db.scalar(select(AuthorizationCode).where(AuthorizationCode.code_hash == code_hash))
     db.refresh(row)
     return row
+
+
+def why_not_redeemable(db: Session, code: str, *, client_id: uuid.UUID,
+                       redirect_uri: str, at: datetime | None = None) -> str:
+    """Why consume_code refused, for the audit trail. It records; it never
+    decides — the refusal has already happened."""
+    row = db.scalar(select(AuthorizationCode).where(
+        AuthorizationCode.code_hash == hash_code(code))) if code else None
+    moment = at or now()
+    if row is None:
+        return "no such code"
+    if row.consumed_at is not None:
+        return "already redeemed"
+    if _utc(row.expires_at) <= moment:
+        return "expired"
+    if row.oauth_client_id != client_id:
+        return "issued to another client"
+    if row.redirect_uri != redirect_uri:
+        return "redirect_uri does not match the one used at authorize"
+    return "not redeemable"

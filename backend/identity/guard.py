@@ -46,6 +46,10 @@ class Access(str, Enum):
 
     # Anyone. No session is read and no CSRF header is asked for.
     PUBLIC = "public"
+    # A calling service, not a person. No session is read — there is no browser
+    # and no cookie — and no CSRF header; the route authenticates the service
+    # by its client credentials, in constant work, before it does anything.
+    CLIENT_CREDENTIALS = "client_credentials"
     # An active account that has cleared every interstitial check.
     SESSION = "session"
     # SESSION, for a page a browser navigates to rather than an API a script
@@ -77,6 +81,8 @@ ROUTES: dict[str, Access] = {
     # someone who never replaced an administrator-set password could still
     # obtain a code. As a SESSION_PAGE it gets every interstitial check.
     "/oauth/authorize": Access.SESSION_PAGE,
+    # Called by a product's backend with its client secret, never by a browser.
+    "/oauth/token": Access.CLIENT_CREDENTIALS,
 
     # FastAPI's generated documentation describes the admin API, so it is not
     # handed to strangers.
@@ -118,6 +124,9 @@ ROUTES: dict[str, Access] = {
 # Namespaces this service owns. A path inside one with no row in ROUTES is
 # refused. Every other path belongs to the SPA.
 RESERVED = ("/api", "/oauth", "/.well-known")
+
+# Routes the guard lets through without reading a session.
+NO_SESSION = frozenset({Access.PUBLIC, Access.CLIENT_CREDENTIALS})
 
 SAFE_METHODS = frozenset({"GET", "HEAD"})
 MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
@@ -193,7 +202,7 @@ def inspect(request: Request) -> JSONResponse | RedirectResponse | None:
     access = access_for(path)
     if access is None:
         return _refuse(404, "Not found.")
-    if access is Access.PUBLIC:
+    if access in NO_SESSION:
         return None
     page = access is Access.SESSION_PAGE
 

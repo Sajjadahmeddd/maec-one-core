@@ -397,10 +397,13 @@ keep.
 
 ## 11. How does a separated Engineering Tools enforce anything? — decided: b1
 
-**Status:** decided before the OIDC layer is built. The token carries the
-*inputs* to the permission decision, and the product re-runs the resolution
-itself. Engineering Tools can split on this basis; nothing for it exists yet —
-no keypair, no JWKS, no client registration, no authorize or token endpoints.
+**Status:** decided before the OIDC layer was built; Core's side was built in
+Prompt 6 — `resolution.py`, the database-free engine; `permissions.load()`; the
+signing key and JWKS (#15); `/oauth/authorize`; `/oauth/token`; a token that
+lives fifteen minutes (#16). The token carries the *inputs* to the permission
+decision, and the product re-runs the resolution itself. Not yet built: the
+client side. Engineering Tools does not verify a token or resolve from its
+claims.
 
 **The problem, as it stood.** Every enforcement path takes a live `Session` on
 the identity database: `can()`, `entitled()`, `is_global_admin()`,
@@ -478,10 +481,11 @@ that up. It is bounded three ways:
   edits, and tool rules set **or cleared** (#13) — so a refresh can tell a
   stale token from a current one by comparing a number.
 
-**Still open under b1, for the OIDC work to settle:** the token lifetime and
-refresh; how a product writes to the audit trail, since `audit()` is Core's;
-key rotation; and whether a product needs admin-ness at all (probably not —
-administration stays in Core).
+**Still open under b1:** how a product writes to the audit trail, since
+`audit()` is Core's; whether a product ever needs admin-ness (probably not —
+administration stays in Core); and automated key rotation, which is manual for
+now (#15). Settled since: the token lifetime and the absence of refresh tokens
+(#16), and PKCE for confidential clients (#17).
 
 **Settled first, so the claims are built on a stable engine** (Prompt 5):
 `edit` is enforced as it claims (#3); a rejected tool-rule batch writes nothing
@@ -665,3 +669,52 @@ There is no admin surface for step 2 — it is SQL, deliberately not built yet.
 
 **Compromise** is rotation without the wait: retire the old row at once. Every
 token it signed stops verifying immediately, which is the point.
+
+---
+
+## 16. Token lifetime: fifteen minutes, never past the subscription — decided
+
+**Status:** decided and built in Prompt 6.
+
+In Core every request re-reads the account, so a suspension or a revoked seat
+bites on the very next request. A token is a copy of the decision's inputs
+taken at issue, and nothing in it changes when the rows do. Its lifetime is
+therefore the longest a revocation can take to reach a product. That is the
+trade, and this entry is where its size is chosen.
+
+* **Fifteen minutes** (`tokens.TOKEN_TTL`). Long enough that a product is not
+  back at Core on every page; short enough that "how long after I suspend
+  someone does it take effect in Engineering Tools" has an answer an
+  administrator can accept.
+* **`exp` never exceeds the subscription's `valid_to`** when one is set, and is
+  floored to the second so the cap cannot round past it.
+* **`pv` is the freshness epoch.** It is `permissions_version` at issue, bumped
+  by every change to a person's access, tool-rule clears included (#13). A
+  product that compares it can learn its claims are stale before `exp`.
+  Nothing compares it yet: that is the client side's work.
+* **No refresh tokens.** When a token expires the product sends the person
+  back through authorize. While Core's session lives, that is a redirect with
+  no sign-in screen.
+
+**If fifteen minutes proves too slow** for suspension, the shape is a shorter
+token or a back-channel check of `pv` — not a longer token with a revocation
+list bolted on.
+
+---
+
+## 17. PKCE: not required for confidential clients — decided, with a trigger
+
+**Status:** decided in Prompt 6.
+
+Engineering Tools is a confidential client. It has a backend, keeps its client
+secret there, and exchanges the code server-to-server. PKCE exists to bind the
+code exchange to the client that started the flow when that client cannot keep
+a secret. Here the secret already does that, and the code is additionally bound
+to the client, the redirect URI and the nonce, and lives thirty seconds.
+
+**The trigger:** the first public client — a single-page app, a mobile app,
+anything that would have to ship its secret to a person's device — needs PKCE
+(S256) before it is registered. The token endpoint would then require a
+`code_verifier` for that client, and `oauth_clients` would gain a client type.
+Registering a public client without it is the mistake this entry exists to
+prevent.
