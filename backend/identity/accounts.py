@@ -136,7 +136,8 @@ def grant_role(db: Session, *, actor: User, target: User, role: Role,
     why = may_grant(db, actor=actor, target_org_id=target.org_id, role=role,
                     scope_type=scope_type, scope_id=scope_id)
     if why is not None:
-        _refuse(db, actor, target, role, scope_type, scope_id, request, why)
+        _refuse(db, actor, target, role, scope_type, scope_id, request, why,
+                commit=commit)
 
     grant = UserRole(user_id=target.id, role_id=role.id, scope_type=scope_type,
                      scope_id=scope_id, granted_by=actor.id)
@@ -152,11 +153,18 @@ def grant_role(db: Session, *, actor: User, target: User, role: Role,
     return grant
 
 
-def _refuse(db, actor, target, role, scope_type, scope_id, request, why: str):
+def _refuse(db, actor, target, role, scope_type, scope_id, request, why: str,
+            *, commit: bool = True):
+    # The refusal row commits on its own only when this call owns the
+    # transaction. With commit=False the caller does, and has usually written
+    # something already — committing here would persist it alongside a
+    # refusal. The caller rolls back and the row goes with it: the price of the
+    # caller's all-or-nothing, and the right way round. OPEN-DECISIONS #13.
     audit(db, actor=actor, action="role.grant", target_type="user", target_id=target.id,
           result="blocked", request=request,
           after={"role": role.key, "scope_type": scope_type, "scope_id": scope_id,
-                 "reason": why})
+                 "reason": why},
+          commit=commit)
     raise EscalationError(f"Not permitted: {why}.")
 
 
@@ -363,11 +371,14 @@ def assign_license(db: Session, *, actor: User, target: User, app: Application,
                and _as_utc(subscription.valid_from) <= moment
                and (subscription.valid_to is None
                     or _as_utc(subscription.valid_to) >= moment))
+    # Both refusals below honour `commit`, as `_refuse` does: with
+    # commit=False the caller owns the transaction. OPEN-DECISIONS #13.
     if not in_date:
         audit(db, actor=actor, action="license.assign", target_type="user",
               target_id=target.id, result="blocked", request=request,
               application_id=app.id,
-              after={"application": app.key, "reason": "no active subscription"})
+              after={"application": app.key, "reason": "no active subscription"},
+              commit=commit)
         raise NotSubscribedError(
             f"Your organisation does not hold an active subscription to {app.name}.")
 
@@ -383,7 +394,8 @@ def assign_license(db: Session, *, actor: User, target: User, app: Application,
                   target_id=target.id, result="blocked", request=request,
                   application_id=app.id,
                   after={"application": app.key, "seats": subscription.seats,
-                         "in_use": used, "reason": "no seat free"})
+                         "in_use": used, "reason": "no seat free"},
+                  commit=commit)
             raise SeatsExhaustedError(
                 f"All {subscription.seats} {app.name} seats are in use. "
                 "Free one, or increase the subscription.")

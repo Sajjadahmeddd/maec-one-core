@@ -143,7 +143,13 @@ def _editable(db: Session, role: Role, actor: User) -> Role:
 
 def _refuse_escalation(db: Session, actor: User, key: str, request: Request,
                        role: Role) -> None:
-    """You cannot give away what you do not hold."""
+    """You cannot give away what you do not hold.
+
+    Dormant today: this router requires Global Admin, and a Global Admin
+    returns on the first line. Kept so the rule holds the day a narrower
+    administrator reaches role editing. Its refusal commits its own audit row,
+    which is safe only because patch_role calls it before writing anything.
+    """
     if is_global_admin(db, actor):
         return
     if not can(db, actor, key):
@@ -251,6 +257,17 @@ def patch_role(role_id: uuid.UUID, body: RolePatch, request: Request,
     registry = {p.key: p for p in _registry(db)}
     before = {"name": role.name, "description": role.description}
 
+    # Every change is checked before anything is written. A refusal audits
+    # with its own commit on the session this route shares, so a rename or an
+    # earlier change applied first would have been committed alongside the
+    # 403 — the defect put_tool_rules had. See OPEN-DECISIONS #13.
+    for change in body.changes:
+        if change.key not in registry:
+            raise HTTPException(status_code=422,
+                                detail=f"Unknown permission {change.key!r}.")
+        if change.effect == "allow":
+            _refuse_escalation(db, actor, change.key, request, role)
+
     if body.name is not None:
         role.name = body.name.strip()
     if body.description is not None:
@@ -258,13 +275,7 @@ def patch_role(role_id: uuid.UUID, body: RolePatch, request: Request,
 
     applied: dict[str, str | None] = {}
     for change in body.changes:
-        permission = registry.get(change.key)
-        if permission is None:
-            raise HTTPException(status_code=422,
-                                detail=f"Unknown permission {change.key!r}.")
-        if change.effect == "allow":
-            _refuse_escalation(db, actor, change.key, request, role)
-
+        permission = registry[change.key]
         existing = db.scalar(select(RolePermission).where(
             RolePermission.role_id == role.id,
             RolePermission.permission_id == permission.id))

@@ -122,6 +122,28 @@ def test_a_lead_may_only_grant_what_they_themselves_hold(db):
     assert audit_rows(db, "role.grant", "blocked")
 
 
+def test_a_refused_grant_inside_a_callers_transaction_commits_nothing(db):
+    """commit=False means the caller owns the unit of work — the CSV import
+    creates a person and grants them a role together. A refusal inside it
+    must not commit what the caller wrote before it.
+
+    `_refuse` used to audit with its own commit whatever the caller asked, so
+    the half-made person below was persisted by the very refusal meant to stop
+    the import. Unreachable through the import today — only a Global Admin
+    can run it, and may_grant never refuses one — but the shape was wrong.
+    """
+    admin, engineer = user(db, ADMIN_EMAIL), user(db, ENGINEER_EMAIL)
+    person = accounts.create_user(db, actor=admin, email="half-made@mirageaec.com",
+                                  display_name="Half Made", password="Pending@2026",
+                                  commit=False)
+    with pytest.raises(accounts.EscalationError):
+        accounts.grant_role(db, actor=engineer, target=person,
+                            role=role(db, "global_admin"),
+                            scope_type="platform", scope_id=None, commit=False)
+    db.rollback()                                        # what the caller does
+    assert user(db, "half-made@mirageaec.com") is None
+
+
 def test_a_successful_grant_bumps_the_target_and_is_recorded(db):
     admin, engineer = user(db, ADMIN_EMAIL), user(db, ENGINEER_EMAIL)
     before = engineer.permissions_version

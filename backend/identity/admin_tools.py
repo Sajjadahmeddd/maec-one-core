@@ -146,9 +146,25 @@ def list_tool_rules(db: Session = Depends(get_db),
 def put_tool_rules(body: ToolRulesPut, request: Request,
                    db: Session = Depends(get_db),
                    actor: User = Depends(require_global_admin)):
-    """Apply a set of changes. Any rejection rejects the whole set."""
-    applied, affected_users = [], set()
+    """Apply a set of changes. Any rejection rejects the whole set.
 
+    Two passes, the shape of admin_import's plan() and apply(): every change
+    is resolved and checked first, writing nothing, and only a set with no
+    rejection is written — then committed once.
+
+    The order is what makes the first sentence true. A refusal is audited
+    with its own commit on the session this route shares, so when changes
+    were applied as the loop walked them, a batch whose second change
+    overreached committed the first and still answered 409.
+    See OPEN-DECISIONS #13.
+    """
+    # ---- pass 1: resolve and check. Nothing is written in this pass.
+    #
+    # A change naming something that does not exist is refused on the spot
+    # with no audit row: there is no rule to record. A change naming real
+    # things but promising more than the role grants is collected, so one
+    # refusal names everything wrong with the set.
+    planned: list[tuple[ToolRuleChange, Application, Role]] = []
     for change in body.changes:
         app = db.scalar(select(Application).where(
             Application.key == change.application_key))
@@ -171,6 +187,43 @@ def put_tool_rules(body: ToolRulesPut, request: Request,
                 status_code=422,
                 detail=f"Unknown module {change.module_key!r} for {app.key}.")
 
+        planned.append((change, app, role))
+
+    overreaching: list[tuple[ToolRuleChange, Application, Role, list[str]]] = []
+    for change, app, role in planned:
+        if change.access_level is None:
+            continue
+        # A rule may not promise access the role does not grant.
+        implied = LEVEL_IMPLIES[change.access_level]
+        granted = _role_allows(db, role, app.key, change.module_key)
+        missing = sorted(implied - granted)
+        if missing:
+            overreaching.append((change, app, role, missing))
+
+    if overreaching:
+        for change, app, role, missing in overreaching:
+            audit(db, actor=actor, action="tool_rule.set", target_type="tool_rule",
+                  target_id=f"{app.key}:{change.module_key}:{role.key}",
+                  result="blocked", request=request, org_id=actor.org_id,
+                  after={"access_level": change.access_level,
+                         "reason": "would grant what the role denies",
+                         "missing": missing},
+                  commit=False)
+        db.commit()          # the refusal rows and nothing else: no change was applied
+        problems = " ".join(
+            f"{role.name} is not granted "
+            f"{', '.join(f'{app.key}:{change.module_key}:{a}' for a in missing)}, "
+            f"so '{change.access_level}' there would do nothing."
+            for change, app, role, missing in overreaching)
+        raise HTTPException(
+            status_code=409,
+            detail=(f"{problems} A tool rule can only take access away, never add "
+                    f"it. Change the role on Roles & Permissions, or pick a "
+                    f"narrower level. Nothing in this set was applied."))
+
+    # ---- pass 2: every change passed. Write them all, commit once.
+    applied, affected_users = [], set()
+    for change, app, role in planned:
         existing = db.scalar(select(ToolRule).where(
             ToolRule.org_id == actor.org_id,
             ToolRule.application_id == app.id,
@@ -183,26 +236,6 @@ def put_tool_rules(body: ToolRulesPut, request: Request,
                 applied.append({"module": change.module_key, "role": role.key,
                                 "access_level": None})
             continue
-
-        # A rule may not promise access the role does not grant.
-        implied = LEVEL_IMPLIES[change.access_level]
-        granted = _role_allows(db, role, app.key, change.module_key)
-        overreach = sorted(implied - granted)
-        if overreach:
-            audit(db, actor=actor, action="tool_rule.set", target_type="tool_rule",
-                  target_id=f"{app.key}:{change.module_key}:{role.key}",
-                  result="blocked", request=request, org_id=actor.org_id,
-                  after={"access_level": change.access_level,
-                         "reason": "would grant what the role denies",
-                         "missing": overreach})
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"{role.name} is not granted "
-                    f"{', '.join(f'{app.key}:{change.module_key}:{a}' for a in overreach)}. "
-                    f"A tool rule can only take access away, never add it — so "
-                    f"'{change.access_level}' here would do nothing. Change the "
-                    f"role on Roles & Permissions, or pick a narrower level."))
 
         if existing is None:
             db.add(ToolRule(org_id=actor.org_id, application_id=app.id,

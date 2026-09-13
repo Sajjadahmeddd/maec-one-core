@@ -416,3 +416,49 @@ quiet loosening because someone reported the surprise as a bug.
 
 **Worth doing either way:** screen 002 can see this case at configuration
 time and say so, which is cheaper than anyone diagnosing it from the symptom.
+
+---
+
+## 13. A refusal commits on its own only when nothing else is pending — decided
+
+**Status:** decided in Prompt 5, after a batch endpoint broke it.
+
+`audit()` commits by default, and it commits *the session*, not the row. The
+guard, the dependencies and the route share one session per request (#7), so
+"commit this refusal" means "commit everything this request has written so
+far". At almost every refusal site that is harmless, because the refusal comes
+before any write. It was wrong at three:
+
+| Site | What was pending | Reachable |
+|---|---|---|
+| `admin_tools.put_tool_rules` | earlier changes in the same batch | **yes** — a batch whose second change overreached committed the first and still answered 409 |
+| `admin_roles.patch_role` | the rename, and earlier permission changes | no — Global Admin only, and one never refuses |
+| `accounts._refuse` under `grant_role(commit=False)` | the caller's unit of work: the CSV import's created people | no — the import is Global Admin only, and `may_grant` never refuses one |
+
+**The rule:**
+
+> Check everything before writing anything. A refusal that happens before any
+> write may commit its own audit row. A function that takes `commit=False`
+> passes it to its refusal audits as well: the caller owns the transaction,
+> rolls it back on the exception, and the refusal row goes with it.
+
+`put_tool_rules` and `patch_role` now validate before they write — the
+`plan()` / `apply()` shape `admin_import` already had. `put_tool_rules` also
+collects every overreaching change into one 409, with one blocked audit row
+each, so an administrator sees everything wrong with a set at once. A change
+naming something that does not exist — an unknown application, role or module
+— is still refused on the spot with no audit row: nothing was written, and
+there is no rule to record. `accounts._refuse` and both of
+`assign_license`'s refusals honour `commit`.
+
+The other sixteen `audit()` calls that commit by default were each read, not
+grepped: every one runs before its function or route has written anything.
+
+**The cost accepted:** under `commit=False`, a refusal's audit row is lost when
+the caller rolls back. A durable refusal record and the caller's
+all-or-nothing cannot both win inside one transaction, and the caller's
+atomicity does. A caller that needs the record writes it after its rollback.
+
+**Noticed, not changed:** clearing a tool rule does not bump its holders'
+`permissions_version`, though setting one does. Harmless today — nothing reads
+the version — but it will matter the day a token carries it.

@@ -281,6 +281,91 @@ def test_the_blocked_write_is_audited(admin_client, db):
     assert rows and rows[0].actor_email == ADMIN_EMAIL
 
 
+# ------------------------------------------- 002: a rejected set writes nothing
+def test_a_batch_with_a_later_rejection_persists_nothing(admin_client, db):
+    """"Any rejection rejects the whole set", proven with more than one change.
+
+    The first change is valid on its own; the second overreaches. Changes used
+    to be applied as the loop walked them, so auditing the second committed
+    the first and the route still answered 409. Every earlier test sent a
+    single change, which is why the suite could not see it.
+    """
+    from backend.identity.models import AuditLog
+    employee = db_role(db, "employee")
+    r = admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [
+        {"application_key": "engineering", "module_key": "airsizer",
+         "role_id": str(employee.id), "access_level": "view"},       # valid alone
+        {"application_key": "engineering", "module_key": "hapext",
+         "role_id": str(employee.id), "access_level": "full"},       # overreaches
+    ]})
+    assert r.status_code == 409
+    assert "Nothing in this set was applied" in r.json()["detail"]
+
+    db.expire_all()
+    assert db.scalar(select(ToolRule)) is None                  # the valid change did not land
+    rows = db.scalars(select(AuditLog).where(AuditLog.action == "tool_rule.set")).all()
+    assert [(row.result, row.target_id) for row in rows] == [
+        ("blocked", "engineering:hapext:employee")]             # the refusal, no success
+
+
+def test_a_rejected_batch_leaves_an_existing_rule_in_place(admin_client, db):
+    """The same for the other kind of write: clearing a rule is a delete, and
+    a rejected set must not perform it. Every rejection in the set is named in
+    one refusal, rather than found one resubmission at a time."""
+    from backend.identity.models import AuditLog
+    employee = db_role(db, "employee")
+    assert admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [
+        {"application_key": "engineering", "module_key": "hapext",
+         "role_id": str(employee.id), "access_level": "view"}]}).status_code == 200
+
+    r = admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [
+        {"application_key": "engineering", "module_key": "hapext",
+         "role_id": str(employee.id), "access_level": None},         # clear it
+        {"application_key": "engineering", "module_key": "airsizer",
+         "role_id": str(employee.id), "access_level": "full"},       # overreaches
+        {"application_key": "engineering", "module_key": "rebadge",
+         "role_id": str(employee.id), "access_level": "full"},       # overreaches
+    ]})
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert "engineering:airsizer:configure" in detail
+    assert "engineering:rebadge:configure" in detail
+
+    db.expire_all()
+    kept = db.scalar(select(ToolRule))
+    assert kept is not None and (kept.module_key, kept.access_level) == ("hapext", "view")
+    blocked = db.scalars(select(AuditLog).where(AuditLog.action == "tool_rule.set",
+                                                AuditLog.result == "blocked")).all()
+    assert len(blocked) == 2
+
+
+def test_a_refused_role_edit_does_not_commit_the_rename(db):
+    """patch_role checks every change before writing any — the rename included.
+
+    Unreachable over HTTP: the router is Global Admin only, and a Global Admin
+    holds everything. So the route function is called directly with a
+    narrower actor, which is the day this exists for.
+    """
+    from fastapi import HTTPException
+    from backend.identity.admin_roles import PermissionChange, RolePatch, patch_role
+
+    engineer = db_user(db, ENGINEER_EMAIL)
+    custom = Role(key="renamable", name="Renamable", level=4,
+                  org_id=engineer.org_id, is_custom=True)
+    db.add(custom)
+    db.commit()
+
+    body = RolePatch(name="Renamed", changes=[
+        PermissionChange(key="engineering:hapext:configure", effect="allow")])
+    with pytest.raises(HTTPException) as refused:
+        patch_role(custom.id, body, None, db, engineer)
+    assert refused.value.status_code == 403
+
+    db.rollback()                                    # what closing the request does
+    db.expire_all()
+    assert db.get(Role, custom.id).name == "Renamable"
+
+
 def test_a_rule_can_be_cleared(admin_client, db):
     employee = db_role(db, "employee")
     admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [{
