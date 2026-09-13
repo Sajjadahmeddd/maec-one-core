@@ -169,9 +169,9 @@ def test_the_api_reports_which_rules_hide_and_which_block(admin_client, db):
     constant contains a string — is the difference between testing the
     behaviour and testing the spelling.
 
-    NOTE: nothing consumes `hides_from_nav` yet. Until Engineering Tools'
-    navigation reads it, `hidden` blocks nothing and hides nothing. See
-    OPEN-DECISIONS.md.
+    Core draws no module navigation, so the reader of this contract is the
+    product's own. Under the token design the product receives the tool
+    rules and applies HIDES_FROM_NAV itself. See OPEN-DECISIONS #3.
     """
     employee = db_role(db, "employee")
     admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [{
@@ -247,6 +247,27 @@ def test_a_narrower_level_is_accepted(admin_client, db):
     assert r.json()["users_affected"] == 1
     stored = db.scalar(select(ToolRule))
     assert stored.access_level == "view" and stored.status == "active"
+
+
+def test_an_edit_rule_is_accepted_and_removes_configuration(admin_client, db):
+    """The administrator's intent, end to end: the write goes through because
+    the role grants everything `edit` implies, and configuration is then gone
+    rather than silently kept."""
+    lead = db_role(db, "business_admin")
+    engineer = db_user(db, ENGINEER_EMAIL)
+    grant = db.scalar(select(UserRole).where(UserRole.user_id == engineer.id))
+    grant.role_id = lead.id
+    db.commit()
+
+    r = admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [{
+        "application_key": "engineering", "module_key": "hapext",
+        "role_id": str(lead.id), "access_level": "edit"}]})
+    assert r.status_code == 200, r.text
+
+    db.expire_all()
+    engineer = db_user(db, ENGINEER_EMAIL)
+    assert can(db, engineer, "engineering:hapext:convert") is True
+    assert can(db, engineer, "engineering:hapext:configure") is False
 
 
 def test_the_blocked_write_is_audited(admin_client, db):

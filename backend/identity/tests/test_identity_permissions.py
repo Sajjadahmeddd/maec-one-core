@@ -253,6 +253,53 @@ def test_a_view_only_tool_rule_keeps_view_and_nothing_else(db):
     assert can(db, engineer, CONVERT) is False
 
 
+def test_an_edit_tool_rule_takes_configuration_away(db):
+    """`edit` is everything except configure — and is now enforced as that.
+
+    Before, `_LEVEL_ALLOWS["edit"]` permitted every action while the write
+    path said it omitted configure, so this rule was accepted and changed
+    nothing. The employee role already denies configure, so the engineer
+    leads the application instead: a role that genuinely allows it.
+    """
+    engineer = user(db, ENGINEER_EMAIL)
+    grant = db.scalar(select(UserRole).where(UserRole.user_id == engineer.id))
+    grant.role_id = role(db, "business_admin").id
+    db.commit()
+    assert can(db, engineer, CONFIGURE) is True          # the role allows it
+
+    db.add(ToolRule(org_id=engineer.org_id, application_id=app(db).id, module_key="hapext",
+                    role_id=role(db, "business_admin").id, access_level="edit"))
+    db.commit()
+    for action in ("view", "convert", "export"):
+        assert can(db, engineer, f"engineering:hapext:{action}") is True, action
+    assert can(db, engineer, CONFIGURE) is False         # <- permitted before the fix
+    assert can(db, engineer, "engineering:airsizer:configure") is True   # other modules untouched
+
+
+def test_the_two_level_tables_cannot_drift():
+    """Enforcement and the write path read one list of levels, and the two
+    restricting levels permit exactly what they imply — no more.
+
+    Actions beyond today's four are included, so "no more" still holds for
+    an action added to the registry later.
+    """
+    from backend.identity import admin_tools, seed
+
+    assert set(permissions._LEVEL_ALLOWS) == set(permissions.LEVEL_IMPLIES)
+    assert set(admin_tools.LEVELS) == set(permissions.LEVEL_IMPLIES)
+    assert permissions.HIDES_FROM_NAV <= set(permissions.LEVEL_IMPLIES)
+
+    candidates = set(seed.ACTIONS) | {"approve", "delete", "administer"}
+    for level in ("view", "edit"):
+        permitted = {a for a in candidates if permissions._LEVEL_ALLOWS[level](a)}
+        assert permitted == permissions.LEVEL_IMPLIES[level], level
+
+    # the three special levels, stated rather than derived
+    assert all(permissions._LEVEL_ALLOWS["full"](a) for a in candidates)
+    assert all(permissions._LEVEL_ALLOWS["hidden"](a) for a in candidates)
+    assert not any(permissions._LEVEL_ALLOWS["no_access"](a) for a in candidates)
+
+
 def test_a_tool_rule_cannot_grant_what_the_role_denies(db):
     """`full` on a module does not turn the employee's configure deny into an allow."""
     engineer = user(db, ENGINEER_EMAIL)

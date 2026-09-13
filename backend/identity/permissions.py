@@ -70,34 +70,14 @@ ANONYMOUS_ACTOR = "(anonymous)"
 # Higher number: more specific. Most specific wins.
 SPECIFICITY = {"platform": 1, "organization": 2, "application": 3, "project": 4}
 
-# What each tool-rule level still permits. A rule can only ever narrow what
-# the role already allowed — nothing here can turn a denial into a grant,
-# which is structural rather than a check: this runs after the role has
-# already decided, and it can only subtract.
+# What each level implies a role must already allow. The write path in
+# admin_tools refuses a rule that promises more than the role grants.
 #
-# `hidden` and `no_access` are NOT the same thing, and collapsing them is the
-# mistake this table exists to prevent:
-#
-#   hidden     the module is not offered in the navigation, but the API still
-#              answers. Decluttering, not a boundary. Anyone who knows the
-#              URL can still call it — which is the point: it is for tools a
-#              team simply does not use, not for tools they must not reach.
-#   no_access  the API refuses. This is the security boundary.
-#
-# So `hidden` permits here and is filtered in the UI; `no_access` denies.
-_LEVEL_ALLOWS: dict[str, Callable[[str], bool]] = {
-    "full": lambda action: True,
-    "edit": lambda action: True,
-    "view": lambda action: action == "view",
-    "hidden": lambda action: True,        # UX only — see above
-    "no_access": lambda action: False,    # the boundary
-}
-
-# Levels that take a module out of the navigation, whatever the API does.
-HIDES_FROM_NAV = frozenset({"hidden", "no_access"})
-
-# What each level implies a role should be able to do. Used on the write path
-# to refuse a rule that promises access the role does not grant.
+# For the two levels that restrict — `edit` and `view` — this is also exactly
+# what they permit at enforcement. `_LEVEL_ALLOWS` below derives from it rather
+# than restating it, because the two tables once disagreed: `edit` omitted
+# configure here and permitted it there, so an administrator who set `edit` to
+# take configuration away got no change and no warning.
 LEVEL_IMPLIES: dict[str, frozenset[str]] = {
     "full": frozenset({"view", "convert", "export", "configure"}),
     "edit": frozenset({"view", "convert", "export"}),
@@ -105,6 +85,48 @@ LEVEL_IMPLIES: dict[str, frozenset[str]] = {
     "hidden": frozenset(),
     "no_access": frozenset(),
 }
+
+
+def _permits_only_what_it_implies(level: str) -> Callable[[str], bool]:
+    listed = LEVEL_IMPLIES[level]
+    return lambda action: action in listed
+
+
+# What each tool-rule level still permits. A rule can only ever narrow what
+# the role already allowed — nothing here can turn a denial into a grant,
+# which is structural rather than a check: this runs after the role has
+# already decided, and it can only subtract.
+#
+# Three levels are special and stay explicit:
+#
+#   full       every action, including one added to the registry later. Not
+#              derived from LEVEL_IMPLIES on purpose: that lists today's four
+#              actions for the write-path check, and a module gaining a fifth
+#              must not have its full-access rules quietly start refusing it.
+#   hidden     the module is not offered in the navigation, but the API still
+#              answers. Decluttering, not a boundary. Anyone who knows the
+#              URL can still call it — which is the point: it is for tools a
+#              team simply does not use, not for tools they must not reach.
+#   no_access  the API refuses. This is the security boundary.
+#
+# `hidden` and `no_access` are NOT the same thing, and collapsing them is the
+# mistake this table exists to prevent. `hidden` permits here and is filtered
+# in the navigation; `no_access` denies.
+_LEVEL_ALLOWS: dict[str, Callable[[str], bool]] = {
+    "full": lambda action: True,
+    "edit": _permits_only_what_it_implies("edit"),
+    "view": _permits_only_what_it_implies("view"),
+    "hidden": lambda action: True,        # UX only — see above
+    "no_access": lambda action: False,    # the boundary
+}
+
+# Levels that take a module out of the navigation, whatever the API does.
+#
+# Core renders no module navigation — its launcher shows applications — so the
+# reader of this is the product's own navigation. Under the token design the
+# product receives the organisation's tool rules for its application and
+# applies this set itself. See OPEN-DECISIONS #3.
+HIDES_FROM_NAV = frozenset({"hidden", "no_access"})
 
 
 def now() -> datetime:

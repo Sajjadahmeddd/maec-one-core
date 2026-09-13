@@ -41,7 +41,9 @@ from .permissions import (
 router = APIRouter(prefix="/api/admin", tags=["admin"],
                    dependencies=[Depends(require_global_admin)])
 
-LEVELS = ("full", "edit", "view", "hidden", "no_access")
+# The level list is the engine's, not a copy of it: a level that exists here
+# and not in permissions.py would be accepted and then enforced as nothing.
+LEVELS = tuple(LEVEL_IMPLIES)
 STATUSES = ("active", "controlled")
 
 
@@ -127,7 +129,8 @@ def list_tool_rules(db: Session = Depends(get_db),
         "rules": rules,
         "levels": [
             {"key": "full", "label": "Full Access", "tone": "granted"},
-            {"key": "edit", "label": "Edit", "tone": "granted"},
+            {"key": "edit", "label": "Edit", "tone": "granted",
+             "note": "Everything except configuration."},
             {"key": "view", "label": "View", "tone": "scoped"},
             {"key": "hidden", "label": "Hidden", "tone": "inactive",
              "note": "Removed from navigation. The API still answers — this is "

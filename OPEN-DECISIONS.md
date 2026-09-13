@@ -59,38 +59,54 @@ and modules first; if they are placeholder art, the Figma should be corrected.
 
 ---
 
-## 3. `hidden` has no consumer — needs a decision, then a small change
+## 3. The level list — decided: `edit` fixed, `hidden` kept, its reader is the product
 
-**Status:** a level an administrator can set that currently does nothing.
+**Status:** resolved in Prompt 5. Settled as one design problem, because it
+was one: two of the five levels did nothing.
 
-Screens 002 distinguishes two restrictive levels, deliberately:
-
-| Level | Navigation | API | Nature |
+| Level | Permits at the API | Navigation | Defined as |
 |---|---|---|---|
-| `hidden` | not rendered | still answers | decluttering |
-| `no_access` | not rendered | refuses (403) | security boundary |
+| `full` | every action, including future ones | shown | explicit |
+| `edit` | view, convert, export | shown | derived from `LEVEL_IMPLIES` |
+| `view` | view | shown | derived from `LEVEL_IMPLIES` |
+| `hidden` | every action | not rendered | explicit — decluttering |
+| `no_access` | nothing (403) | not rendered | explicit — the boundary |
 
-`no_access` works end to end — `can()` denies, the guard returns 403, tested.
+**`edit` — fixed.** It was enforced exactly like `full`:
+`_LEVEL_ALLOWS["edit"]` permitted every action while `LEVEL_IMPLIES["edit"]`
+omitted configure. The write path accepted `edit` on a module where the role
+grants configure, and configure stayed allowed — an administrator removing
+configuration rights got no change and no warning. `edit` and `view` now
+derive their enforcement from `LEVEL_IMPLIES`, `admin_tools.LEVELS` is read
+from the same dict, and `test_the_two_level_tables_cannot_drift` fails if the
+tables part again. `full`, `hidden` and `no_access` stay explicit, each with
+its reason written at the definition.
 
-`hidden` does **not**. `permissions.HIDES_FROM_NAV` and the `hides_from_nav`
-flag on `GET /api/admin/tool-rules` both exist, but nothing reads them:
-Engineering Tools' tab bar does not consult tool rules. So setting a module to
-`hidden` today hides nothing and blocks nothing.
+**`hidden` — kept, and not surfaced in `/api/auth/me`.** That was the
+suggested consumer, and it turned out not to be one. Core draws no module
+navigation: its launcher shows applications, and the only use of
+`hides_from_nav` in Core's frontend is a chip on the tool-rules matrix. The
+navigation that shows modules is Engineering Tools' tab bar, which cannot read
+Core's `/me` — CORS is closed and never allows credentials. A `/me` field would
+have been a second decorative thing, and computing it correctly means
+resolving every module without calling `can()` per module (#7), which is the
+in-memory resolver arriving early.
 
-That is the exact failure the same screen refuses elsewhere — it rejects a
-tool rule that would silently do nothing, on the grounds that a rule which
-lies about its effect is worse than no rule. `hidden` is currently such a
-rule.
+The reader is the product. Under option b1 (#11) the token carries the
+organisation's tool rules for the audience application, and the product applies
+`HIDES_FROM_NAV` to its own navigation from them. Removing `hidden` now would
+design the claim shape without it and force a token-format change to put it
+back.
 
-**To settle:** either
+**What stays true until then:** Engineering Tools holds no token yet, so
+`hidden` still hides nothing in the product. The difference is that the gap is
+now owned — it closes with the OIDC client — and the screen states what the
+level does ("removed from navigation; the API still answers").
 
-* surface the effective hidden modules in `GET /api/auth/me` and have the
-  product navigation honour them (small, but it touches Engineering Tools' tab
-  bar, which Prompt 2 said not to modify); or
-* remove `hidden` from the level list until there is a consumer, leaving
-  `no_access` as the only restrictive level.
-
-Doing neither leaves an administrator able to set a control that does nothing.
+**For the OIDC client:** drop a module from navigation when any tool rule on
+the grants that win `module:view` is in `HIDES_FROM_NAV` — the same tie-break
+as step 5 of `can()` (#12). Deciding "hidden" by a looser rule than the one
+`can()` uses would be a second engine.
 
 ---
 
