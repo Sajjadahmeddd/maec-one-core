@@ -255,3 +255,15 @@ def test_the_composite_audit_index_is_present(session):
         "select indexdef from pg_indexes "
         "where indexname='ix_audit_logs_org_created'")).endswith(
             "(org_id, created_at DESC)")
+
+
+# ------------------------------------------- migrations run in this process
+def test_running_the_migrations_in_process_leaves_the_service_logging(pg):
+    """Alembic's env.py configures logging from alembic.ini, and
+    logging.config.fileConfig disables every logger that already exists by
+    default — `maec.identity` included. This module runs the migrations inside
+    the test process, so every fail-closed warning written by a later test
+    went nowhere, and the first test to assert on one failed for a reason
+    unrelated to what it tested. Found in Prompt 6."""
+    import logging
+    assert logging.getLogger("maec.identity").disabled is False

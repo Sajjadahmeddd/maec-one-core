@@ -16,7 +16,11 @@ from backend.identity.models import Base
 
 alembic_config = context.config
 if alembic_config.config_file_name is not None:
-    fileConfig(alembic_config.config_file_name)
+    # disable_existing_loggers=False: fileConfig's default switches off every
+    # logger that already exists. When the migrations run inside another
+    # process — the PostgreSQL integrity tests do — that silenced
+    # `maec.identity`, and every fail-closed warning after it went nowhere.
+    fileConfig(alembic_config.config_file_name, disable_existing_loggers=False)
 
 # configparser treats % as interpolation; a URL-encoded password (%40 for
 # @) has to be escaped before it is handed to Alembic.
