@@ -21,6 +21,18 @@ import os
 os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
 os.environ["SESSION_SECRET"] = "test-only-session-secret"
 
+# A signing key made for this run, so the suite never signs with — or
+# publishes — the developer's key from .env.
+from cryptography.hazmat.primitives import serialization  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
+
+os.environ["OIDC_PRIVATE_KEY"] = rsa.generate_private_key(
+    public_exponent=65537, key_size=2048).private_bytes(
+    serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+    serialization.NoEncryption()).decode()
+os.environ["OIDC_KEY_ID"] = "test-key"
+os.environ["OIDC_ISSUER"] = "https://auth.test.invalid"
+
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402

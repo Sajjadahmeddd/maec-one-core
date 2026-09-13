@@ -63,6 +63,20 @@ services:
       - key: SESSION_SECRET
         generateValue: true
 
+      # The key Core signs identity tokens with. sync:false, pasted into the
+      # dashboard: generateValue cannot produce an RSA key, and every instance
+      # must sign with the same one. The service refuses to start without it
+      # (identity/config.py). Generate an RSA key of at least 2048 bits; the
+      # PEM may be pasted on one line with literal \n. OPEN-DECISIONS #15.
+      - key: OIDC_PRIVATE_KEY
+        sync: false
+      # A new id for every new key: verifiers cache keys by id. Core refuses to
+      # start if this id is already published with a different key.
+      - key: OIDC_KEY_ID
+        sync: false
+      - key: OIDC_ISSUER
+        value: https://auth.mirageaec.com
+
       - key: BOOTSTRAP_ADMIN_EMAIL
         sync: false
       - key: BOOTSTRAP_ADMIN_PASSWORD

@@ -30,7 +30,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .identity import (
     admin_audit, admin_import, admin_provisioning, admin_roles, admin_tools,
-    admin_users, guard, router_admin, router_auth,
+    admin_users, guard, keys, router_admin, router_auth,
 )
 
 # Core's own version. The original read this from `hap_converter.__version__`,
@@ -39,17 +39,35 @@ __version__ = "1.0.0"
 
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 
+# The key that signs tokens is read now, at import, for the same reason the
+# session secret is: on Render a missing key refuses to start, before any
+# request, rather than serving a JWKS nothing can be verified against.
+keys.signing_key()
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Signing in is always required. Say what the service is running on,
-    without echoing anything secret."""
+    without echoing anything secret, and publish the signing key."""
     where = "on Render" if identity_config.on_render() else "locally"
     print(f"MAEC One Core: per-user sign-in against the identity database ({where}).")
     if not os.environ.get("DATABASE_URL", "").strip():
         print("MAEC One Core: DATABASE_URL is not set — sign-in cannot work until it is.")
     if not identity_config.session_secret_configured():
         print("MAEC One Core: SESSION_SECRET unset — everyone is signed out on restart.")
+
+    from .identity.db import session_factory
+    try:
+        with session_factory()() as session:
+            published = keys.ensure_published(session)
+        print(f"MAEC One Core: signing key {published.kid} published at /.well-known/jwks.json.")
+    except keys.SigningKeyConflict:
+        raise                   # two keys under one id: refuse to serve
+    except Exception as exc:
+        # The database may not be reachable yet. The token endpoint publishes
+        # the key before it signs anything, so this is a delay, not a gap.
+        print(f"MAEC One Core: signing key not published at startup ({type(exc).__name__}); "
+              "it will be before the first token is signed.")
     yield
 
 

@@ -108,3 +108,46 @@ def session_secret_configured() -> bool:
 
 def on_render() -> bool:
     return bool(os.environ.get("RENDER"))
+
+
+# ------------------------------------------------------------------- OIDC
+DEFAULT_ISSUER = "https://auth.mirageaec.com"
+
+
+def oidc_private_key_pem() -> str | None:
+    """The RSA private key that signs tokens, as PEM — or None locally.
+
+    From the environment, never the database. Three reasons: Render's
+    generateValue cannot produce an RSA key; every instance must sign with
+    the same key, so a key generated per process would mint tokens that other
+    instances cannot vouch for; and a private key in a table is one SQL
+    injection away from being read.
+
+    Refused outright on Render when absent, like SESSION_SECRET, and for the
+    same reason raised here rather than in a lifespan handler: `main.py`
+    reads it at import, so the refusal precedes any request. Locally None,
+    and keys.py generates an ephemeral key and says so.
+
+    A dashboard or a .env file may hold the PEM on one line with literal
+    `\\n` sequences; both that and real newlines are accepted.
+    """
+    value = os.environ.get("OIDC_PRIVATE_KEY", "").strip()
+    if value:
+        return value.replace("\\n", "\n")
+    if on_render():
+        raise RuntimeError(
+            "OIDC_PRIVATE_KEY is not set. Generate an RSA key of at least 2048 "
+            "bits and paste its PEM into the Render dashboard. Refusing to start "
+            "rather than generate one, because every instance must sign with the "
+            "same key.")
+    return None
+
+
+def oidc_key_id() -> str | None:
+    """The configured key id, or None to use the key's RFC 7638 thumbprint."""
+    return os.environ.get("OIDC_KEY_ID", "").strip() or None
+
+
+def oidc_issuer() -> str:
+    """The `iss` every token carries and every product checks."""
+    return os.environ.get("OIDC_ISSUER", "").strip().rstrip("/") or DEFAULT_ISSUER

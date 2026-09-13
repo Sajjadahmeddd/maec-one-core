@@ -267,3 +267,87 @@ def test_running_the_migrations_in_process_leaves_the_service_logging(pg):
     unrelated to what it tested. Found in Prompt 6."""
     import logging
     assert logging.getLogger("maec.identity").disabled is False
+
+
+# ------------------------------------------------ the OIDC tables (Prompt 6)
+def test_a_signing_key_status_and_algorithm_are_checked(session):
+    """Autogenerate has missed CHECK constraints three times in this repo.
+    These ask PostgreSQL whether this migration's arrived."""
+    from backend.identity.models import SigningKey
+    for bad, constraint in (({"status": "compromised"}, "ck_signing_keys_status"),
+                            ({"algorithm": "HS256"}, "ck_signing_keys_algorithm")):
+        session.add(SigningKey(kid=f"probe-{constraint}", public_pem="x", **bad))
+        with pytest.raises(Exception, match=constraint):
+            session.commit()
+        session.rollback()
+
+
+def _probe_client(session, client_id):
+    from backend.identity.models import Application, OAuthClient
+    app = session.scalar(select(Application).where(Application.key == "engineering"))
+    return OAuthClient(client_id=client_id, client_secret_hash="x", application_id=app.id,
+                       name="Probe", redirect_uris=["https://probe.invalid/cb"])
+
+
+def test_an_oauth_client_status_is_checked(session):
+    client = _probe_client(session, "probe-status")
+    client.status = "paused"
+    session.add(client)
+    with pytest.raises(Exception, match="ck_oauth_clients_status"):
+        session.commit()
+    session.rollback()
+
+
+def test_an_authorization_code_hash_is_unique(session):
+    """The token endpoint looks a code up by its hash; two rows under one
+    hash would make that lookup ambiguous."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy.exc import IntegrityError
+
+    from backend.identity.models import AuthorizationCode
+
+    client = _probe_client(session, "probe-unique")
+    session.add(client)
+    session.commit()
+    admin = user(session, "admin@mirageaec.com")
+    expires = datetime.now(timezone.utc) + timedelta(seconds=30)
+    for _ in range(2):
+        session.add(AuthorizationCode(
+            code_hash="0" * 64, oauth_client_id=client.id, user_id=admin.id,
+            application_id=client.application_id, redirect_uri="https://probe.invalid/cb",
+            nonce="n", expires_at=expires))
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
+
+
+def test_the_oidc_migration_round_trips_with_rows_present(pg):
+    """Up, down and up again, with rows in the new tables and the old ones —
+    so the downgrade is known to work on a database that has been used, not
+    only on an empty one. Last in this module: it leaves the schema at head."""
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import inspect as schema
+
+    from backend.identity import keys
+
+    oidc_tables = {"signing_keys", "oauth_clients", "authorization_codes"}
+    cfg = Config(str(REPO / "backend" / "identity" / "alembic.ini"))
+
+    with pg.session_factory()() as session:
+        keys.ensure_published(session)                      # a row in a new table
+        session.add(_probe_client(session, "probe-round-trip"))
+        session.commit()
+        users_before = session.scalar(text("select count(*) from users"))
+    assert users_before > 0
+
+    command.downgrade(cfg, "1340605a8316")
+    assert not oidc_tables & set(schema(pg.engine()).get_table_names())
+    with pg.session_factory()() as session:
+        assert session.scalar(text("select count(*) from users")) == users_before
+
+    command.upgrade(cfg, "head")
+    assert oidc_tables <= set(schema(pg.engine()).get_table_names())
+    with pg.session_factory()() as session:
+        assert session.scalar(text("select count(*) from users")) == users_before

@@ -368,3 +368,84 @@ class AuditLog(Base):
     after: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=now, index=True)
+
+
+# ----------------------------------------------------------- OIDC provider
+class OAuthClient(Base):
+    """A service Core hands a verified identity to.
+
+    One per application for now; nothing here limits it to one. The secret is
+    argon2id-hashed like a password and shown once, at registration.
+    `redirect_uris` is a list of exact absolute URIs: authorize compares whole
+    strings, never prefixes, because a prefix match is the classic OIDC open
+    redirect.
+    """
+    __tablename__ = "oauth_clients"
+    __table_args__ = (
+        CheckConstraint("status IN ('active','disabled')", name="ck_oauth_clients_status"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    client_id: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
+    client_secret_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("applications.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    redirect_uris: Mapped[list] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    created_at: Mapped[datetime] = _created()
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    application: Mapped[Application] = relationship()
+
+
+class AuthorizationCode(Base):
+    """A one-time code between authorize and token: 30 seconds, single use.
+
+    Only the SHA-256 of the code is stored. The code is 256 bits of randomness,
+    so a fast hash already makes a leaked table useless — and it must be looked
+    up by that hash, which a salted password hash could not be. Consumed and
+    expired rows are kept briefly for the audit trail and swept when new codes
+    are written.
+    """
+    __tablename__ = "authorization_codes"
+
+    id: Mapped[uuid.UUID] = _pk()
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    # The client row, not its public client_id string — named so the two are
+    # never confused.
+    oauth_client_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("oauth_clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("applications.id", ondelete="CASCADE"), nullable=False)
+    redirect_uri: Mapped[str] = mapped_column(String(500), nullable=False)
+    nonce: Mapped[str] = mapped_column(String(255), nullable=False)
+    state_echo: Mapped[str | None] = mapped_column(String(500))
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created()
+
+
+class SigningKey(Base):
+    """The PUBLIC half of a key Core signs tokens with, for JWKS to publish.
+
+    The private key never touches the database; it lives in OIDC_PRIVATE_KEY.
+    `active` means published. A key being rotated out stays active until every
+    token it signed has expired, and is then retired. OPEN-DECISIONS #15.
+    """
+    __tablename__ = "signing_keys"
+    __table_args__ = (
+        CheckConstraint("status IN ('active','retired')", name="ck_signing_keys_status"),
+        CheckConstraint("algorithm IN ('RS256')", name="ck_signing_keys_algorithm"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    kid: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    public_pem: Mapped[str] = mapped_column(Text, nullable=False)
+    algorithm: Mapped[str] = mapped_column(String(10), nullable=False, default="RS256")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    created_at: Mapped[datetime] = _created()
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

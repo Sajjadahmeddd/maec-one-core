@@ -16,6 +16,7 @@ psycopg[binary]
 argon2-cffi
 python-dotenv
 slowapi
+pyjwt[crypto]>=2.8         # signs the OIDC tokens (RS256) and serves the JWKS
 
 # --- tests
 pytest

@@ -625,3 +625,43 @@ lifetime bounds how long an already-issued one outlives a suspension.
   the seat does nothing until it is restored, but a screen could say so;
 * `can()` and `/api/auth/me` each read one more row, the organisation — once
   per request, then served from the session's identity map.
+
+---
+
+## 15. Signing keys: the private half in the environment, the public half in the database — decided
+
+**Status:** decided and built in Prompt 6.
+
+**The private key lives in `OIDC_PRIVATE_KEY`, never in a table.** Three
+reasons: Render's `generateValue` cannot make an RSA key; every instance must
+sign with the same key; and a private key in a table is one SQL injection from
+being read. On Render a missing key refuses to start, raised inside the
+accessor `main.py` calls at import — the same shape, and the same reason, as
+`SESSION_SECRET`. Locally an absent key means an ephemeral one, generated per
+process and logged as such. Tokens it signed stop verifying at a restart, and
+the previous throwaway is retired rather than published forever.
+
+**The public half lives in `signing_keys`**, upserted at startup and again
+before any token is signed, so Core can never issue a token whose key JWKS does
+not publish. JWKS serves every `active` row. `active` means *published*, not
+*signing*: the table exists so a key can go on being published after it stops
+signing, until every token it signed has expired.
+
+**Key ids.** `OIDC_KEY_ID` when it is set, otherwise the key's RFC 7638
+thumbprint. Verifiers cache keys by id, so an id already published with a
+different key refuses to start (`SigningKeyConflict`), and a retired id cannot
+sign again. New key, old id is the mistake a rotation most often makes; it is
+caught at boot rather than surfacing as tokens that intermittently fail to
+verify.
+
+**Rotation, when it is needed** — not automated:
+
+1. Generate a new key. Set `OIDC_PRIVATE_KEY` and a **new** `OIDC_KEY_ID`, and
+   deploy. The new key signs and its row is added; the old row stays `active`,
+   so tokens signed before the deploy still verify.
+2. Once the token lifetime (#16) has passed, set the old row to `retired`.
+
+There is no admin surface for step 2 — it is SQL, deliberately not built yet.
+
+**Compromise** is rotation without the wait: retire the old row at once. Every
+token it signed stops verifying immediately, which is the point.
