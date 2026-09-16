@@ -21,6 +21,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+# The version of this engine's behaviour, for people. A vendored copy is checked
+# byte for byte against resolution.sha256; this is what a report of a mismatch
+# can quote, so it says which contract each side believes it implements. Bump it
+# only when what resolve(), to_claims() or from_claims() decide or produce
+# changes — never for a comment or a rename.
+RESOLUTION_CONTRACT = "1"
+
 log = logging.getLogger("maec.identity")
 
 

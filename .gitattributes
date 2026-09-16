@@ -1,0 +1,7 @@
+# resolution.py is vendored into other repositories and checked there against
+# the SHA-256 published in resolution.sha256. Pin both to LF in every checkout,
+# whatever core.autocrlf says, so the bytes on disk are the bytes that were
+# hashed. (The hash is also computed over LF-normalised bytes; this makes a
+# plain sha256sum agree with it too.)
+backend/identity/resolution.py text eol=lf
+backend/identity/resolution.sha256 text eol=lf
