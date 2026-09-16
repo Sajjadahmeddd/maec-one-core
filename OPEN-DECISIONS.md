@@ -725,3 +725,45 @@ anything that would have to ship its secret to a person's device — needs PKCE
 `code_verifier` for that client, and `oauth_clients` would gain a client type.
 Registering a public client without it is the mistake this entry exists to
 prevent.
+
+---
+
+## 18. The shared engine is vendored, not packaged — decided, with triggers
+
+**Status:** decided in Prompt 7, with step 1 of the Engineering Tools client.
+
+#11 settled *what* a product runs: this engine, over a token's claims — one
+engine, two sources, never two engines. It left open *how* the second
+repository gets the engine.
+
+**Decided: a byte-identical vendored copy, guarded by a published hash.**
+`resolution.py` is copied into the product repository beside a copy of
+`resolution.sha256`, and the product's suite fails when the two disagree.
+Core's own suite fails if the engine changes and the published hash does not
+(`test_resolution_hash_matches`), so the hash can never fall behind the file it
+describes.
+
+**Why not a package.** For a single product a package earns nothing and costs a
+build, a version, a release step and somewhere to publish it — and it moves the
+failure from "a test fails now" to "somebody forgot to bump a pin". A vendored
+copy with a structural guard is the weight this codebase already puts on
+invariants of this kind: the guard table, the `inspect.getsource` checks that
+keep preview and commit on one code path, the scan that proves nothing updates
+an audit row.
+
+**What the guard cannot do.** The product cannot see Core's *current* hash. Core
+changing the engine while nobody re-vendors it leaves the product's tests green
+against the copy it already holds. Closing that needs something able to reach
+both repositories at once.
+
+**The triggers — either one:**
+
+* **A third product needs the engine.** Three copies is where a copying ritual
+  stops being reliable and a published package starts to earn its keep.
+* **The two repositories share a CI.** Then promote the drift check from
+  within-repo to cross-repo: fetch Core's `resolution.sha256` at that commit and
+  compare, so a stale vendored copy fails instead of passing quietly.
+
+Until then the update ritual lives where the copy does, in Engineering Tools'
+`backend/maec_auth/README.md`: replace the file and its hash from Core, never
+edit it in place.
