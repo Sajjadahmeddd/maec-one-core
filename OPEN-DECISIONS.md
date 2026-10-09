@@ -924,3 +924,38 @@ are not used by same-domain apps. No refresh tokens are built for them.
 
 **The trigger for waking it:** any app that cannot live under mirageaec.com — a
 product sold to a client on their own domain, or a partner's service.
+
+---
+
+## 20. Rate limits — the numbers, and what each one keys on
+
+**Status:** decided in Prompt 9a (E4, E5). The numbers live in code beside the
+routes they guard; this entry is why they are what they are.
+
+| Limit | Value | Keyed on | Where |
+|---|---|---|---|
+| Sign-in | 10 a minute | client address (#6) | `router_auth.LOGIN_RATE` |
+| Account lockout | 5 failures, then 1 min doubling to 30 min | the account | `router_auth.LOCK_*` |
+| Token endpoint, per address | 120 a minute | client address (#6) | `router_oidc.TOKEN_RATE_PER_IP` |
+| Token endpoint, per client | 240 a minute | the *proven* client | `router_oidc.TOKEN_RATE_PER_CLIENT` |
+
+All four share one switch and one store (`router_auth.limiter`), in memory,
+per process. Two instances would each allow the full amount — acceptable at
+one instance; a shared store is the change if Core ever runs two.
+
+**The token endpoint.** Every call verifies a client secret with argon2, on
+purpose, so a refusal costs what a success costs (#17's constant-work rule).
+Unthrottled, that was the cheapest way to burn Core's CPU.
+
+* *Per address, before any secret is checked.* This is the limit that bounds
+  the argon2 work one address can cause. 120 a minute because a product's
+  backend exchanges every person's sign-in from one address; a morning rush
+  must not trip it. The path is dormant for same-domain apps (#19), so in
+  practice it guards against abuse, not load.
+* *Per client, only once the client has proved itself.* A limit keyed on a
+  client_id merely *claimed* would let anyone throttle a real application by
+  sending its id from many addresses. Keyed on the proven client, it bounds a
+  misbehaving or compromised application instead.
+* *Throttled calls are not audited.* A refusal that writes a row per attempt
+  hands a flood a second thing to fill. The calls that are judged — 401, 400,
+  200 — are audited as before.

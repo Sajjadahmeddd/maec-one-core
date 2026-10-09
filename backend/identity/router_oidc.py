@@ -19,9 +19,11 @@ from urllib.parse import parse_qsl, unquote_plus, urlencode, urlsplit, urlunspli
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from limits import parse
 from sqlalchemy.orm import Session
 
-from . import keys, oauth, tokens
+from . import keys, oauth, security, tokens
+from .router_auth import limiter
 from .db import get_db
 from .models import User
 from .permissions import audit, entitled, require_user
@@ -41,6 +43,35 @@ MAX_STATE = 500
 MAX_NONCE = 255
 
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
+# The token endpoint verifies a client secret with argon2 on every call — on
+# purpose, so a refusal costs the same as a success. Unthrottled, that made it
+# the cheapest way to burn Core's CPU. OPEN-DECISIONS #20.
+#
+#   per IP      checked first, before any secret is verified: what bounds the
+#               argon2 work one address can cause.
+#   per client  checked only after the client has proved who it is. Keyed on
+#               a client_id merely *claimed*, it would let anyone throttle a
+#               real application by sending its id.
+#
+# Generous, because one app's backend exchanges every sign-in from one address.
+# Shared with the login limit's storage and switch (router_auth.limiter).
+TOKEN_RATE_PER_IP = "120/minute"
+TOKEN_RATE_PER_CLIENT = "240/minute"
+
+
+def _within(rate: str, *key: str) -> bool:
+    """Count one call against this limit; False once it is exceeded."""
+    if not limiter.enabled:
+        return True
+    return limiter.limiter.hit(parse(rate), "oauth.token", *key)
+
+
+def _too_many() -> JSONResponse:
+    # Not audited: a refusal that writes a row per attempt would hand the
+    # flood a second thing to fill.
+    return JSONResponse({"error": "too_many_requests"}, status_code=429,
+                        headers={**NO_STORE, "Retry-After": "60"})
 
 
 @router.get("/.well-known/jwks.json")
@@ -210,6 +241,9 @@ def token(request: Request, db: Session = Depends(get_db),
     No session is read and no CSRF header is asked for: the caller is a
     product's backend, which proves who it is with its client secret.
     """
+    if not _within(TOKEN_RATE_PER_IP, "ip", security.client_ip(request) or "unknown"):
+        return _too_many()
+
     basic = _basic_credentials(request.headers.get("authorization", ""))
     if basic is not None:
         if client_secret:
@@ -229,6 +263,8 @@ def token(request: Request, db: Session = Depends(get_db),
     client = oauth.authenticate_client(db, client_id, client_secret)
     if client is None:
         return refuse("invalid_client", "client authentication failed", status=401)
+    if not _within(TOKEN_RATE_PER_CLIENT, "client", client.client_id):
+        return _too_many()
     application = client.application
 
     if grant_type != "authorization_code":
