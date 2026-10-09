@@ -404,6 +404,52 @@ def test_eight_exchanges_racing_through_the_token_endpoint_yield_one_token(pg):
     assert sorted(statuses) == [200] + [400] * 7
 
 
+# ------------------------------------------- server-side sessions (Prompt 9a)
+def _session_row(session, *, created, absolute, idle, digest=None):
+    import secrets
+
+    from backend.identity.models import LoginSession
+    return LoginSession(
+        session_hash=digest or secrets.token_hex(32),
+        user_id=user(session, "admin@mirageaec.com").id,
+        created_at=created, last_seen_at=created,
+        absolute_expires_at=absolute, idle_expires_at=idle)
+
+
+def test_a_session_row_is_checked_by_the_database(session):
+    """Both CHECKs on `sessions`, asked of PostgreSQL: the idle window never
+    outruns the absolute one, and a session ends after it starts."""
+    from datetime import datetime, timedelta, timezone
+
+    moment = datetime.now(timezone.utc)
+    for absolute, idle, constraint in (
+            (moment + timedelta(hours=1), moment + timedelta(hours=2),
+             "ck_sessions_idle_within_absolute"),
+            (moment - timedelta(hours=1), moment - timedelta(hours=2),
+             "ck_sessions_ends_after_it_starts")):
+        session.add(_session_row(session, created=moment, absolute=absolute, idle=idle))
+        with pytest.raises(Exception, match=constraint):
+            session.commit()
+        session.rollback()
+
+
+def test_a_session_hash_is_unique(session):
+    """The cookie's id is looked up by its hash; two rows under one hash would
+    make a sign-in ambiguous."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy.exc import IntegrityError
+
+    moment = datetime.now(timezone.utc)
+    for _ in range(2):
+        session.add(_session_row(session, created=moment, digest="f" * 64,
+                                 absolute=moment + timedelta(hours=10),
+                                 idle=moment + timedelta(hours=2)))
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
+
+
 def test_the_oidc_migration_round_trips_with_rows_present(pg):
     """Up, down and up again, with rows in the new tables and the old ones —
     so the downgrade is known to work on a database that has been used, not
@@ -412,14 +458,21 @@ def test_the_oidc_migration_round_trips_with_rows_present(pg):
     from alembic.config import Config
     from sqlalchemy import inspect as schema
 
+    from datetime import datetime, timedelta, timezone
+
     from backend.identity import keys
 
-    oidc_tables = {"signing_keys", "oauth_clients", "authorization_codes"}
+    # the OIDC tables, and every table a later revision added on top of them
+    oidc_tables = {"signing_keys", "oauth_clients", "authorization_codes", "sessions"}
     cfg = Config(str(REPO / "backend" / "identity" / "alembic.ini"))
 
     with pg.session_factory()() as session:
         keys.ensure_published(session)                      # a row in a new table
         session.add(_probe_client(session, "probe-round-trip"))
+        moment = datetime.now(timezone.utc)                 # and one in sessions
+        session.add(_session_row(session, created=moment,
+                                 absolute=moment + timedelta(hours=10),
+                                 idle=moment + timedelta(hours=2)))
         session.commit()
         users_before = session.scalar(text("select count(*) from users"))
     assert users_before > 0

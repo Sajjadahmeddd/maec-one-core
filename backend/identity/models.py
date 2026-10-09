@@ -91,10 +91,52 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     org: Mapped[Organization] = relationship()
+    sessions: Mapped[list["LoginSession"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan")
     roles: Mapped[list["UserRole"]] = relationship(
         back_populates="user", foreign_keys="UserRole.user_id", cascade="all, delete-orphan")
     licenses: Mapped[list["UserLicense"]] = relationship(
         back_populates="user", foreign_keys="UserLicense.user_id", cascade="all, delete-orphan")
+
+
+class LoginSession(Base):
+    """One sign-in, recorded so it can be revoked. OPEN-DECISIONS #5, #19.
+
+    The browser's cookie carries a 256-bit random session id; this row stores
+    only its SHA-256, so a leaked table cannot be replayed as cookies. The id
+    is high-entropy, so a fast hash is enough and it can be looked up by —
+    the same reasoning as `authorization_codes.code_hash`.
+
+    The row is the authority: no row that is unrevoked and inside both its
+    absolute and idle windows means not signed in, whatever the signed cookie
+    says. Named LoginSession so it is never confused with SQLAlchemy's
+    Session; the table is `sessions`.
+    """
+    __tablename__ = "sessions"
+    __table_args__ = (
+        # The idle window is pushed forward on use but never past the end of
+        # the absolute one; a row claiming otherwise was not written by
+        # sessions.py.
+        CheckConstraint("idle_expires_at <= absolute_expires_at",
+                        name="ck_sessions_idle_within_absolute"),
+        CheckConstraint("absolute_expires_at > created_at",
+                        name="ck_sessions_ends_after_it_starts"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    session_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = _created()
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=now)
+    absolute_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    idle_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ip: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(400))
+
+    user: Mapped[User] = relationship(back_populates="sessions")
 
 
 # ------------------------------------------------------------ the products
