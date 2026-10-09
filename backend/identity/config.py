@@ -75,6 +75,44 @@ def session_idle_minutes() -> float:
 # the browser keeping a cookie past the longest a row could last.
 SESSION_MAX_AGE = int(session_absolute_hours() * 60 * 60)
 
+
+def session_cookie_domain() -> str | None:
+    """The cookie's Domain attribute, or None for a host-only cookie.
+
+    Production: `.mirageaec.com`, so the browser sends Core's session to every
+    app under it and the gate can check it (OPEN-DECISIONS #19). Locally:
+    `.maec.local`. Unset keeps the cookie host-only, which is how it has
+    always been, so nothing changes until this is set deliberately.
+
+    A browser silently refuses a cookie whose Domain does not cover the host
+    that set it. With `.maec.local` configured, sign in at
+    http://auth.maec.local:8000 — at http://127.0.0.1:8000 the sign-in
+    succeeds and the browser throws the cookie away.
+    """
+    value = os.environ.get("SESSION_COOKIE_DOMAIN", "").strip().lower()
+    if not value:
+        return None
+    if any(c in value for c in ":/ \t") or "." not in value.strip("."):
+        raise RuntimeError(
+            f"SESSION_COOKIE_DOMAIN must be a bare domain such as .mirageaec.com, "
+            f"not {value!r}.")
+    return value
+
+
+def session_cookie_options() -> dict:
+    """Everything SessionMiddleware is built with, in one place, so main.py and
+    the tests read the same answer."""
+    return {
+        "session_cookie": SESSION_COOKIE,
+        "max_age": SESSION_MAX_AGE,
+        "same_site": "lax",
+        # Always Secure on Render. Everywhere else the cookie is marked Secure
+        # per request, whenever that request arrived over https — see
+        # main.SecureSessionCookie.
+        "https_only": on_render(),
+        "domain": session_cookie_domain(),
+    }
+
 # The CSRF token travels in this header. A cross-site form post cannot set a
 # custom header, which is the whole defence; the value is also checked against
 # the session so it cannot simply be invented.

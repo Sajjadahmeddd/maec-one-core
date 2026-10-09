@@ -55,6 +55,10 @@ async def lifespan(_app: FastAPI):
         print("MAEC One Core: DATABASE_URL is not set — sign-in cannot work until it is.")
     if not identity_config.session_secret_configured():
         print("MAEC One Core: SESSION_SECRET unset — everyone is signed out on restart.")
+    domain = identity_config.session_cookie_domain()
+    print("MAEC One Core: session cookie is "
+          + (f"shared across {domain} — sign in at a host under it." if domain
+             else "host-only (SESSION_COOKIE_DOMAIN unset)."))
 
     from .identity.db import session_factory
     try:
@@ -142,22 +146,57 @@ async def gate(request: Request, call_next):
         await run_in_threadpool(guard.release, request)
 
 
-# Signed-cookie sessions: no server-side store, so a restart or a second
-# instance changes nothing. https_only is off in local development because
-# there is no TLS on 127.0.0.1.
-# No `domain` attribute, deliberately: the cookie is host-only. The company
-# site shares the registrable domain (mirageaec.com), and a cookie scoped to
-# .mirageaec.com would put our session inside its reach. This matters more
-# now than it did: Core and the products are separate hosts, and the
-# temptation to "just share the cookie" is exactly what this refuses.
+# The signed cookie carries the session id and the CSRF token; the sessions
+# row it names is the authority (identity/sessions.py, OPEN-DECISIONS #5).
+#
+# The Domain attribute comes from SESSION_COOKIE_DOMAIN. Unset, the cookie is
+# host-only, as it always was. Set to .mirageaec.com, every app under it
+# receives the session and its gate can ask Core about it — the shared
+# sign-in of OPEN-DECISIONS #19. The cost is written down there: every other
+# host under that domain receives it too, the company website included.
 app.add_middleware(
     SessionMiddleware,
     secret_key=identity_config.session_secret(),
-    session_cookie=identity_config.SESSION_COOKIE,
-    max_age=identity_config.SESSION_MAX_AGE,
-    same_site="lax",
-    https_only=identity_config.on_render(),
+    **identity_config.session_cookie_options(),
 )
+
+
+class SecureSessionCookie:
+    """Mark the session cookie Secure whenever the request came over https.
+
+    SessionMiddleware decides Secure once, at start-up, and Core used to tie
+    it to running on Render. Core now runs behind nginx on a VPS, where that
+    test is false and the cookie would have gone out without Secure. Asking
+    each request instead is right everywhere: https in production (seen
+    through X-Forwarded-Proto once the proxy is trusted), plain http on a
+    developer's machine, where a Secure cookie would never be sent back.
+    """
+
+    def __init__(self, app):
+        self.app = app
+        self.prefix = (identity_config.SESSION_COOKIE + "=").encode("latin-1")
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("scheme") != "https":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_secure(message):
+            if message["type"] == "http.response.start":
+                headers = []
+                for name, value in message.get("headers", []):
+                    if (name.lower() == b"set-cookie" and value.startswith(self.prefix)
+                            and b"; secure" not in value.lower()):
+                        value += b"; secure"
+                    headers.append((name, value))
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_secure)
+
+
+# Outside SessionMiddleware, so it sees the Set-Cookie that one writes.
+app.add_middleware(SecureSessionCookie)
 
 
 # Registered last, so it is the outermost layer and sees every response —
