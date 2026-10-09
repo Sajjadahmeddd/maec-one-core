@@ -7,9 +7,11 @@ waiting on a person — a designer, a manager, or a second application existing.
 Add to this file rather than leaving a decision in a commit message or a chat
 log, because that is where they get lost.
 
-**Read 11 first.** It is decided — option b1 — and it shapes everything the
-OIDC layer builds: what the token carries, and why `can()` becomes one
-resolver fed from two sources. The rest can wait as long as they like.
+**Read 19 first.** It decides how every app under mirageaec.com is signed in
+and checked: one shared session cookie and a gate in front of each app, with
+Core answering on every request. It partly reverses **11**, which is still the
+design for any app that must live outside mirageaec.com — read 11 second. The
+rest can wait as long as they like.
 
 ---
 
@@ -133,8 +135,37 @@ their application — that check needs writing the moment projects exist.
 
 ## 5. Session revocation is bounded by cookie lifetime
 
-**Status:** inherited property of signed-cookie sessions, which Prompt 1
-specified. Worth knowing, not currently wrong.
+**Status: resolved in Prompt 9a — sessions are recorded on the server and can
+be revoked.** Settled because #19 made it matter: one cookie now opens every
+app, so "valid until it expires" would have meant every app.
+
+**What replaced it.** A `sessions` row per sign-in. The cookie carries a
+256-bit random session id; the row stores only its SHA-256. The row is the
+authority — the guard, `/api/auth/*` and (from run 2) the gate all ask
+`sessions.resolve()`, and no valid row means not signed in, whatever the
+signed cookie says.
+
+* **Lifetime:** 10 hours absolute, 2 hours idle — `SESSION_ABSOLUTE_HOURS` and
+  `SESSION_IDLE_MINUTES`, replacing the old fixed 12 hours. Ten covers a
+  working day; the idle limit is what makes a browser left signed in on a
+  shared machine stop working within two hours of the last click. The idle
+  clock is pushed forward at most once a minute per session, so a busy page
+  is not a write per request.
+* **Revoked on:** sign-out (that session); a person changing their own password
+  (every session, and a new one is started for the browser that did it — the
+  same thing as "every other session", with the fixation defence included);
+  an administrator's reset, a suspension, and "sign out everywhere"
+  (`POST /api/admin/users/{id}/sessions/revoke`) — every session. Deleting a
+  person deletes their rows by `ON DELETE CASCADE`, which is the same outcome:
+  no row.
+* **Swept on write:** a sign-in deletes rows that ended more than a day ago.
+  The day is kept so a refusal can still say *expired* rather than *never
+  signed in*. No scheduler.
+
+What follows is the entry as it stood before.
+
+**Original status:** inherited property of signed-cookie sessions, which
+Prompt 1 specified. Worth knowing, not currently wrong.
 
 There is no server-side session store, so an individual session cannot be
 revoked. A cookie copied before logout stays valid until it expires (12h).
@@ -412,6 +443,14 @@ decision, and the product re-runs the resolution itself. Not yet built: the
 client side. Engineering Tools does not verify a token or resolve from its
 claims.
 
+**Superseded for same-domain apps by #19.** Every app under mirageaec.com is
+now signed in by a shared cookie and checked by Core's gate on each request,
+and the gate sends the *answer* — the b2 shape rejected below. #19 says why
+that is acceptable today and what happens when project scopes arrive. This
+entry, the OIDC provider it describes, and the vendored engine (#18) remain
+the design for any app that cannot live under mirageaec.com. The provider is
+dormant, not deleted.
+
 **The problem, as it stood.** Every enforcement path takes a live `Session` on
 the identity database: `can()`, `entitled()`, `is_global_admin()`,
 `holds_business_admin()`, and the guard's `inspect()`. After the split Core
@@ -681,7 +720,9 @@ token it signed stops verifying immediately, which is the point.
 
 ## 16. Token lifetime: fifteen minutes, never past the subscription — decided
 
-**Status:** decided and built in Prompt 6.
+**Status:** decided and built in Prompt 6. **Applies only to the dormant OIDC
+path since #19:** an app under mirageaec.com holds no token, and a revocation
+reaches it on its next request through the gate, not within fifteen minutes.
 
 In Core every request re-reads the account, so a suspension or a revoked seat
 bites on the very next request. A token is a copy of the decision's inputs
@@ -767,3 +808,96 @@ both repositories at once.
 Until then the update ritual lives where the copy does, in Engineering Tools'
 `backend/maec_auth/README.md`: replace the file and its hash from Core, never
 edit it in place.
+
+---
+
+## 19. Same-domain apps use a forward-auth gate, not the token handshake — decided
+
+**Status:** decided in Prompt 9. Core's side is built across three runs: 9a
+(revocable sessions, the shared cookie, CSRF on every session route), 9b (the
+gate endpoint and the reference front doors), 9c (the launcher and sign-out).
+
+(#19–#21 in the Engineering Tools repository are that repository's own entries;
+the numbers are not shared.)
+
+**The design.** Every MAEC One app lives under mirageaec.com, so:
+
+* **One login cookie for every app.** Core's session cookie carries
+  `Domain=.mirageaec.com` (`SESSION_COOKIE_DOMAIN`), and the browser sends it to
+  every `*.mirageaec.com` app.
+* **Every request is checked by Core.** Each app's front door — nginx
+  `auth_request`, or a small middleware inside the app where there is no nginx
+  of ours — asks Core: is this browser signed in, and may this person use this
+  app? Core answers 200 with the person's identity and their permissions for
+  that app, or 401 (not signed in) or 403 (not allowed).
+* **Apps contain no login code.** No sign-in page, no handshake, no token
+  verification, no session store. They read who the person is from headers
+  the front door sets, and check a permission key.
+
+**Why it replaced the handshake (#11).** Core's side of the handshake was built
+and tested, but Engineering Tools' side never worked on the developer's
+machine, and finishing it still needed refresh tokens, a Redis session store
+and more handshake fixes — in every app, in every language.
+
+**What it gains:**
+
+* Removing access takes effect on the person's next request. The token design
+  allowed up to fifteen minutes (#16).
+* One sign-out ends every app: it revokes the server-side session (#5), and
+  every app asks about that session on its next request.
+* It works in any language. Timesheet's backend is Node; it needs a header
+  read, not a port of the engine.
+* Apps need no login, token or session code.
+
+**What it costs:**
+
+* **Core is in the path of every request, and fails closed.** If Core cannot
+  answer, no app lets anyone in. That is the right failure for an access
+  check, and it makes Core's availability every app's availability.
+* **It only works for apps under the cookie's domain.**
+* **Every request costs a check.** No cache in Core, because instant
+  revocation is the point. Run 2 measures the cost; keeping hashed static
+  assets out of the check is the obvious first saving, and is run 2's to
+  decide.
+
+**The cookie domain — decided: `.mirageaec.com`,** so no address changes.
+
+* *Accepted cost:* the company website (Hostinger) and any other
+  `*.mirageaec.com` host receive the cookie whenever a signed-in person visits
+  it. A compromised website could record and replay it.
+* *Mitigated by:* revocable server-side sessions (#5), a 10-hour lifetime with
+  a 2-hour idle limit, and `HttpOnly`, so no script on any of those hosts can
+  read it.
+* *Alternative kept open until launch:* a dedicated zone such as
+  `.one.mirageaec.com`, which the website would never see. Before launch,
+  switching is DNS records plus one environment variable,
+  `SESSION_COOKIE_DOMAIN`. After launch it is an address change for every user.
+
+**Sibling subdomains are same-site.** `SameSite=Lax` does not stop a page on
+another `*.mirageaec.com` host from sending a request with the cookie attached.
+So every state-changing route in Core that relies on the session requires the
+CSRF header — not only `/api/admin/*` (Prompt 9a, A3). **Open for run 2:**
+each app's own state-changing routes face the same exposure, because the gate
+will approve any request that carries the cookie. The cheap defence is for the
+gate to refuse a mutating request whose `Origin` is not that app's own
+`base_url`; whichever is chosen, it must be decided before an app with a
+state-changing route goes behind the gate.
+
+**It partly reverses #11.** The gate sends each app the *answer* — the
+effective permission keys for that app, worked out by Core. That is option
+b2, which #11 rejected because it cannot handle a permission that depends on a
+project id known only at request time.
+
+* *Acceptable today:* no project registry exists (#4), and no caller passes a
+  scope other than the default.
+* *When projects arrive:* a project-scoped action makes its own
+  server-to-server call to Core's check with the project as the scope, and
+  Core runs the same engine at that scope. Apps never re-implement the engine.
+  Core still holds the one engine; it only answers in two shapes.
+
+**The dormant OIDC provider.** `/oauth/authorize`, `/oauth/token`, JWKS and the
+vendored engine (#11, #15–#18) stay in the codebase and keep their tests. They
+are not used by same-domain apps. No refresh tokens are built for them.
+
+**The trigger for waking it:** any app that cannot live under mirageaec.com — a
+product sold to a client on their own domain, or a partner's service.
