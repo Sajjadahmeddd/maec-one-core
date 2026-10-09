@@ -20,9 +20,10 @@ Three properties hold whatever is added to the table:
   and fails if a route has no row or a row has no route, so the table cannot
   drift into a second, stale copy of the routing table.
 
-The user is read from the database on every guarded call. That is a
-primary-key lookup, and it is what makes a suspension or a revoked seat bite
-on the very next request rather than at cookie expiry.
+The session and the user are read from the database on every guarded call:
+the `sessions` row for the cookie's id, then the account. Two indexed
+lookups, and they are what make a sign-out, a revoked session, a suspension
+or a revoked seat bite on the very next request rather than at cookie expiry.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.routing import compile_path
 
-from . import security
+from . import security, sessions
 from .db import session_factory
 from .permissions import (
     audit, fail_closed, holds_business_admin, is_global_admin, load_user,
@@ -104,6 +105,7 @@ ROUTES: dict[str, Access] = {
     "/api/admin/users/{user_id}/licenses": Access.ADMIN,
     "/api/admin/users/{user_id}/licenses/{application_key}": Access.ADMIN,
     "/api/admin/users/{user_id}/reset-password": Access.ADMIN,
+    "/api/admin/users/{user_id}/sessions/revoke": Access.ADMIN,
     "/api/admin/import/validate": Access.ADMIN,
     "/api/admin/import/commit": Access.ADMIN,
     "/api/admin/import/batches": Access.ADMIN,
@@ -206,14 +208,17 @@ def inspect(request: Request) -> JSONResponse | RedirectResponse | None:
         return None
     page = access is Access.SESSION_PAGE
 
-    user_id = security.session_user_id(request)
-    if not user_id:
+    if not security.session_id(request):
         return _to_sign_in(request) if page else _refuse(401, "Sign in required.")
 
     db = session_factory()()
     request.state.identity_db = db          # released in release(), below
     try:
-        user = load_user(db, user_id)
+        # The cookie names a session; only a valid row makes it one. Revoked,
+        # past its absolute end or idle too long: not signed in, and resolve()
+        # clears the cookie so the browser stops sending it.
+        row = sessions.resolve(db, request)
+        user = load_user(db, row.user_id) if row is not None else None
         # Held deliberately, not just left in the session. SQLAlchemy's
         # identity map keeps weak references, so once this function returns
         # its local goes out of scope, the entry is collected and the route

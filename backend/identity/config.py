@@ -37,7 +37,43 @@ if (REPO_ROOT / "backend" / "identity") != _HERE:
 load_dotenv(REPO_ROOT / ".env", override=False)
 
 SESSION_COOKIE = "maec_session"
-SESSION_MAX_AGE = 12 * 60 * 60          # one working day
+
+
+def _positive_number(name: str, default: float) -> float:
+    """A positive number from the environment, or the default when unset.
+
+    A value that is set but unusable refuses to start rather than quietly
+    falling back: a typo in a session lifetime should not become the default
+    without anyone noticing.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        raise RuntimeError(f"{name} must be a positive number, not {raw!r}.")
+    return value
+
+
+# How long a sign-in lasts. OPEN-DECISIONS #5. Read on every use rather than
+# once, so a test (or an operator, after a restart) gets what the environment
+# says now.
+def session_absolute_hours() -> float:
+    """The longest a session lives, however busy: a working day."""
+    return _positive_number("SESSION_ABSOLUTE_HOURS", 10)
+
+
+def session_idle_minutes() -> float:
+    """How long a session survives with no request at all."""
+    return _positive_number("SESSION_IDLE_MINUTES", 120)
+
+
+# The cookie's own lifetime. The sessions row ends a session; this only stops
+# the browser keeping a cookie past the longest a row could last.
+SESSION_MAX_AGE = int(session_absolute_hours() * 60 * 60)
 
 # The CSRF token travels in this header. A cross-site form post cannot set a
 # custom header, which is the whole defence; the value is also checked against

@@ -20,7 +20,7 @@ from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import accounts, security
+from . import accounts, security, sessions
 from .db import get_db
 from .models import (
     Application, Organization, Subscription, User, UserLicense,
@@ -198,8 +198,9 @@ def login(request: Request, payload: dict, db: Session = Depends(get_db)):
     user.last_login_at = moment
     if security.needs_rehash(user.password_hash):
         user.password_hash = security.hash_password(password)
-    security.start_session(request, user_id=str(user.id),
-                           permissions_version=user.permissions_version)
+    # A new sessions row and a new cookie. Whatever this browser held before
+    # is revoked: the fixation defence.
+    sessions.start(db, request, user, at=moment)
     audit(db, actor=user, action="login.success", target_type="user", target_id=user.id,
           source="login", result="success", request=request, commit=False)
     db.commit()
@@ -235,24 +236,29 @@ def change_password(body: PasswordChange, request: Request,
                             detail="The new password must be different.")
 
     try:
+        # revokes every session this person holds, this one included
         accounts.set_password(db, actor=user, target=user, password=body.new_password,
                               by_admin=False, request=request)
     except security.WeakPasswordError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    # a new password is a good moment for a new session identifier
-    security.start_session(request, user_id=str(user.id),
-                           permissions_version=user.permissions_version)
+    # ...and this browser, which just proved the password, gets a new one. The
+    # net effect is "every other session signed out", with a fresh id here.
+    sessions.start(db, request, user)
+    db.commit()
     return _me_payload(request, db, user)
 
 
 @router.post("/logout")
 def logout(request: Request, db: Session = Depends(get_db),
            user: User | None = Depends(current_user)):
+    """Revoke this browser's session — on the server, so a copy of the cookie
+    taken before now is worthless too — and clear the cookie."""
+    sessions.end(db, request)
     if user is not None:
         audit(db, actor=user, action="logout", target_type="user", target_id=user.id,
-              source="api", result="success", request=request)
-    security.end_session(request)
+              source="api", result="success", request=request, commit=False)
+    db.commit()
     return {"authenticated": False}
 
 

@@ -450,6 +450,57 @@ def test_a_session_hash_is_unique(session):
     session.rollback()
 
 
+def test_a_session_revoked_on_one_connection_is_refused_on_another_at_once(pg):
+    """Revocation under real concurrency. A browser keeps calling a guarded
+    route, each request on its own pooled connection, while an administrator's
+    revocation commits on a different connection. Every request that starts
+    after that commit is refused — no cache, no grace period — and the ones
+    before it were served. SQLite cannot show this: the unit suite shares one
+    connection, so there is no "other connection" to fail to see the write."""
+    import threading
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from backend.identity import router_auth, sessions
+    from backend.main import app
+
+    router_auth.limiter.enabled = False
+    browser = TestClient(app)
+    assert browser.post("/api/auth/login", json={
+        "email": "admin@mirageaec.com", "password": "Scratch@2026"}).status_code == 200
+
+    seen: list[tuple[float, int]] = []
+    stop = threading.Event()
+
+    def keep_calling():
+        while not stop.is_set():
+            started = time.monotonic()
+            seen.append((started, browser.get("/api/admin/whoami").status_code))
+
+    worker = threading.Thread(target=keep_calling)
+    worker.start()
+    try:
+        while sum(1 for _, status in seen if status == 200) < 3:
+            time.sleep(0.01)
+        with pg.session_factory()() as admin_connection:
+            revoked = sessions.revoke_all(
+                admin_connection, user(admin_connection, "admin@mirageaec.com").id)
+            admin_connection.commit()
+        committed = time.monotonic()
+        while sum(1 for started, _ in seen if started > committed) < 3:
+            time.sleep(0.01)
+    finally:
+        stop.set()
+        worker.join()
+
+    assert revoked >= 1
+    before = [status for started, status in seen if started < committed]
+    after = [status for started, status in seen if started > committed]
+    assert 200 in before
+    assert after and set(after) == {401}, after
+
+
 def test_the_oidc_migration_round_trips_with_rows_present(pg):
     """Up, down and up again, with rows in the new tables and the old ones —
     so the downgrade is known to work on a database that has been used, not

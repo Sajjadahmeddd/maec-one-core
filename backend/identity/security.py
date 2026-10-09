@@ -3,11 +3,11 @@
 Hashing is argon2id (argon2-cffi's default). Nothing reversible is ever
 stored, and nothing here logs or returns a hash.
 
-The session is Starlette's signed cookie. What goes in it is small and
-deliberate: the user id, the permissions version the session was issued
-against, a random session id that changes on every login, and the CSRF
-token. Nothing a request could be tricked into trusting is derived from the
-cookie alone — the user is re-read from the database on every guarded call.
+The cookie is Starlette's signed cookie, and it carries two things: a 256-bit
+random session id, new on every sign-in, and the CSRF token. Who the session
+belongs to is not in it. `sessions.py` looks the id up — by its SHA-256 — in
+the `sessions` table, and that row is the authority: no valid row, not
+signed in, whatever the signature says. OPEN-DECISIONS #5.
 """
 
 from __future__ import annotations
@@ -21,10 +21,8 @@ from fastapi import Request
 
 from . import config
 
-# Session keys. Short, because every request carries them.
-S_USER = "uid"        # user id, as a string
-S_VERSION = "pv"      # permissions_version at issue
-S_ID = "sid"          # changes on every login — the fixation defence
+# Cookie keys. Short, because every request carries them.
+S_ID = "sid"          # the session id; the sessions row holds its SHA-256
 S_CSRF = "csrf"
 
 _hasher = PasswordHasher()   # argon2id, library defaults
@@ -108,16 +106,14 @@ def constant_time_equal(a: str | None, b: str | None) -> bool:
     return hmac.compare_digest((a or "").encode(), (b or "").encode())
 
 
-def start_session(request: Request, *, user_id: str, permissions_version: int) -> None:
-    """A fresh session for a freshly verified user.
+def begin(request: Request, session_id: str) -> None:
+    """Write a new session into the cookie: this id, and a new CSRF token.
 
-    Everything from before is discarded, and the session id and CSRF token
-    are new — so a cookie planted before login is worthless after it.
+    Everything from before is discarded, so a cookie planted before sign-in is
+    worthless after it. Called by `sessions.start`, which writes the row.
     """
     request.session.clear()
-    request.session[S_USER] = user_id
-    request.session[S_VERSION] = int(permissions_version)
-    request.session[S_ID] = secrets.token_urlsafe(24)
+    request.session[S_ID] = session_id
     request.session[S_CSRF] = secrets.token_urlsafe(32)
 
 
@@ -128,20 +124,32 @@ def end_session(request: Request) -> None:
         pass                      # no SessionMiddleware — nothing to clear
 
 
-def session_user_id(request: Request) -> str | None:
+def session_id(request: Request) -> str | None:
+    """The session id the cookie carries, or None. Not proof of anything
+    until `sessions.resolve` has found a valid row for it."""
     try:
-        value = request.session.get(S_USER)
+        value = request.session.get(S_ID)
     except AssertionError:
         return None
-    return str(value) if value else None
+    return value if isinstance(value, str) and value else None
 
 
-def session_id(request: Request) -> str | None:
-    return request.session.get(S_ID)
+def client_ip(request: Request | None) -> str | None:
+    """Where a request came from, for the audit log and the sessions row."""
+    if request is None:
+        return None
+    # Render sits behind a proxy; the first hop in the chain is the client.
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip()[:64]
+    return (request.client.host if request.client else None)
 
 
 def csrf_token(request: Request) -> str | None:
-    return request.session.get(S_CSRF)
+    try:
+        return request.session.get(S_CSRF)
+    except AssertionError:
+        return None
 
 
 def csrf_ok(request: Request) -> bool:

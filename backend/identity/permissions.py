@@ -25,7 +25,7 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import security
+from . import security, sessions
 from .db import get_db
 from .models import (
     Application, AuditLog, Organization, Permission, Role, RolePermission,
@@ -230,13 +230,11 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User | None
     # sharing the session; asking again would be the same row, twice.
     user = getattr(request.state, "identity_user", None)
     if user is None:
-        user = load_user(db, security.session_user_id(request))
-    if user is not None:
-        # The version in the cookie is what the session was issued against.
-        # Roles are re-read on every check anyway, so this only keeps the
-        # cookie honest for the client that asks.
-        if request.session.get(security.S_VERSION) != user.permissions_version:
-            request.session[security.S_VERSION] = user.permissions_version
+        # An unguarded route — /api/auth/*. The same question the guard asks:
+        # a valid sessions row, then an active account. The cookie alone
+        # proves nothing (OPEN-DECISIONS #5).
+        row = sessions.resolve(db, request)
+        user = load_user(db, row.user_id) if row is not None else None
     return user
 
 
@@ -292,14 +290,9 @@ def bump_permissions_version(db: Session, user_id: uuid.UUID | str) -> int:
 
 
 # ----------------------------------------------------------------- audit
-def client_ip(request: Request | None) -> str | None:
-    if request is None:
-        return None
-    # Render sits behind a proxy; the first hop in the chain is the client.
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()[:64]
-    return (request.client.host if request.client else None)
+# Where a request came from. It lives in security.py now, beside the session
+# row that also records it, and is importable from here as it always was.
+client_ip = security.client_ip
 
 
 def audit(db: Session, *, action: str, result: str,

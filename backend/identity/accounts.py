@@ -9,6 +9,10 @@ Three things can never happen, and each is refused here:
   * an administrator handing out more than they hold;
   * the last Global Admin losing the role, being suspended or deleted;
   * a seat being assigned that the organisation has not paid for.
+
+And one always happens: a change that should end someone's sign-ins — a new
+password, by them or an administrator, or a suspension — revokes every session
+they hold, in the same transaction. OPEN-DECISIONS #5.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from fastapi import Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import security
+from . import security, sessions
 from .models import (
     Application, Role, RolePermission, Subscription, User, UserLicense, UserRole,
 )
@@ -207,9 +211,13 @@ def set_user_status(db: Session, *, actor: User, target: User, status: str,
     target.status = status
     db.flush()
     bump_permissions_version(db, target.id)
+    # Not active means not signed in anywhere. The guard would refuse an
+    # inactive account anyway; revoking as well means reactivating someone
+    # does not bring yesterday's cookies back to life.
+    revoked = sessions.revoke_all(db, target.id) if status != "active" else 0
     audit(db, actor=actor, action="user.status", target_type="user", target_id=target.id,
-          result="success", request=request, before=before, after={"status": status},
-          commit=False)
+          result="success", request=request, before=before,
+          after={"status": status, "sessions_revoked": revoked}, commit=False)
     db.commit()
 
 
@@ -222,6 +230,8 @@ def delete_user(db: Session, *, actor: User, target: User,
         raise LastGlobalAdminError(
             "Cannot delete the last Global Admin. Assign another first.")
     before = {"email": target.email, "display_name": target.display_name}
+    # Their sessions rows go with them (ON DELETE CASCADE, and the ORM cascade
+    # on User.sessions): no row, not signed in.
     db.delete(target)
     db.flush()
     audit(db, actor=actor, action="user.delete", target_type="user", target_id=target.id,
@@ -276,6 +286,10 @@ def set_password(db: Session, *, actor: User, target: User, password: str,
 
     An administrator's reset forces a change at next sign-in; a person setting
     their own does not, because they are then the only one who knows it.
+
+    Either way every session the person holds is revoked: whoever knew the
+    old password, or held a cookie minted under it, is signed out. A person
+    changing their own is given a new session by the route that called this.
     """
     security.check_password_policy(password, email=target.email)
     target.password_hash = security.hash_password(password)
@@ -283,11 +297,28 @@ def set_password(db: Session, *, actor: User, target: User, password: str,
     target.failed_login_count = 0
     target.locked_until = None
     db.flush()
+    revoked = sessions.revoke_all(db, target.id)
     audit(db, actor=actor,
           action="user.password" if by_admin else "user.password.self",
           target_type="user", target_id=target.id, result="success", request=request,
-          after={"must_change_password": target.must_change_password}, commit=False)
+          after={"must_change_password": target.must_change_password,
+                 "sessions_revoked": revoked}, commit=False)
     db.commit()
+
+
+def revoke_sessions(db: Session, *, actor: User, target: User,
+                    request: Request | None = None) -> int:
+    """Sign this person out everywhere: revoke every session they hold.
+
+    Their next request to Core, or to any app behind the gate, is refused.
+    Nothing else about the account changes — they can sign in again at once.
+    """
+    revoked = sessions.revoke_all(db, target.id)
+    audit(db, actor=actor, action="user.sessions.revoke", target_type="user",
+          target_id=target.id, result="success", request=request,
+          after={"sessions_revoked": revoked}, commit=False)
+    db.commit()
+    return revoked
 
 
 def update_user(db: Session, *, actor: User, target: User,

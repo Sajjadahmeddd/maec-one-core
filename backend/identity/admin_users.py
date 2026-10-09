@@ -333,3 +333,18 @@ def reset_password(user_id: uuid.UUID, body: PasswordReset, request: Request,
     except Exception as exc:
         raise _refusal(exc) from exc
     return {"id": str(target.id), "must_change_password": True}
+
+
+@router.post("/users/{user_id}/sessions/revoke")
+def revoke_sessions(user_id: uuid.UUID, request: Request,
+                    db: Session = Depends(get_db),
+                    actor: User = Depends(require_global_admin)):
+    """Sign this person out everywhere: Core and every app behind the gate.
+
+    Their account is untouched and they may sign in again at once — this is
+    for a lost laptop or a shared machine, not a suspension. Revoking your own
+    sessions signs you out too, which is what was asked for.
+    """
+    target = _target(db, actor, user_id)
+    revoked = accounts.revoke_sessions(db, actor=actor, target=target, request=request)
+    return {"id": str(target.id), "sessions_revoked": revoked}
