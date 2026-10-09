@@ -61,9 +61,12 @@ def test_the_writer_records_who_did_what_and_from_where(db):
     from backend.identity.models import User
     admin = db.scalar(sel(User).where(User.email == "admin@mirageaec.com"))
 
+    # The peer address is the client as the proxy middleware left it. The
+    # writer never reads X-Forwarded-For itself — a header the sender wrote is
+    # not where they came from (OPEN-DECISIONS #6, test_client_ip.py).
     class FakeRequest:
-        client = type("C", (), {"host": "203.0.113.9"})()
-        headers = {"user-agent": "pytest/1.0", "x-forwarded-for": "198.51.100.4, 10.0.0.1"}
+        client = type("C", (), {"host": "198.51.100.4"})()
+        headers = {"user-agent": "pytest/1.0", "x-forwarded-for": "6.6.6.6"}
 
     audit(db, actor=admin, action="test.action", target_type="thing", target_id="42",
           source="api", result="success", request=FakeRequest(),
@@ -72,7 +75,7 @@ def test_the_writer_records_who_did_what_and_from_where(db):
     assert row.actor_id == admin.id
     assert row.actor_email == admin.email
     assert row.org_id == admin.org_id
-    assert row.ip == "198.51.100.4"                 # the client, not the proxy
+    assert row.ip == "198.51.100.4"                 # the resolved peer, not the header
     assert row.user_agent == "pytest/1.0"
     assert row.before == {"a": 1} and row.after == {"a": 2}
     assert row.created_at is not None

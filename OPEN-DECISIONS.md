@@ -183,7 +183,30 @@ so it wants doing alongside another migration rather than on its own.
 
 ## 6. Rate limiting keys on the socket address, which is a proxy on Render
 
-**Status:** needs verifying after the first deploy.
+**Status: resolved in Prompt 9a (E2).** One function, `security.client_ip`,
+answers "where did this come from" for the login rate limit, the audit log and
+the sessions row. It reads the connection's peer as uvicorn's
+`ProxyHeadersMiddleware` leaves it — and Core installs that middleware itself,
+outermost, with its own list: `TRUSTED_PROXIES` (addresses or CIDR ranges,
+default `127.0.0.1`, `*` refused). `X-Forwarded-For` and `X-Forwarded-Proto`
+are believed only from a peer on that list; from anyone else they are
+ignored. Nothing reads `X-Forwarded-For` directly any more.
+
+* **Production:** nginx in Docker reaches Core from a container address, so
+  `TRUSTED_PROXIES` must name the Docker network's range
+  (`127.0.0.1,172.18.0.0/16`, or whatever `docker network inspect` says).
+  Left at the default, every visitor is the proxy again — the original
+  problem. The uvicorn installed (0.54) accepts CIDR ranges;
+  `test_the_installed_uvicorn_accepts_a_cidr_range` asks it.
+* **Run uvicorn with `--no-proxy-headers`.** Its own default applies a second
+  list (`FORWARDED_ALLOW_IPS`) before Core's; two lists that can disagree is
+  how a `*` set in one place quietly undoes the other.
+* **Still worth the check below after the first deploy** — it now confirms the
+  configuration rather than diagnosing the code.
+
+What follows is the entry as it stood before.
+
+**Original status:** needs verifying after the first deploy.
 
 Login is rate limited per IP via `slowapi`'s `get_remote_address`, which reads
 the socket peer. Behind Render's proxy that is an internal address shared by

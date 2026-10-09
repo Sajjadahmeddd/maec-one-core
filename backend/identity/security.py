@@ -135,14 +135,18 @@ def session_id(request: Request) -> str | None:
 
 
 def client_ip(request: Request | None) -> str | None:
-    """Where a request came from, for the audit log and the sessions row."""
-    if request is None:
+    """Where a request came from: the one answer the login rate limit, the
+    audit log and the sessions row all use.
+
+    It is the connection's peer as uvicorn's ProxyHeadersMiddleware leaves it
+    (main.py): rewritten from X-Forwarded-For only when the peer is one of
+    TRUSTED_PROXIES, untouched otherwise. The header itself is never read
+    here — it is whatever the sender chose to write. OPEN-DECISIONS #6.
+    """
+    if request is None or request.client is None:
         return None
-    # Render sits behind a proxy; the first hop in the chain is the client.
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()[:64]
-    return (request.client.host if request.client else None)
+    host = request.client.host
+    return host[:64] if host else None
 
 
 def csrf_token(request: Request) -> str | None:

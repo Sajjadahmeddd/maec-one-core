@@ -16,7 +16,6 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -31,9 +30,16 @@ from .permissions import (
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
+def _client_key(request: Request) -> str:
+    """The rate limit's key: the client's address as security.client_ip
+    resolves it — the real visitor behind a trusted proxy, never a header
+    the visitor wrote."""
+    return security.client_ip(request) or "unknown"
+
+
 # Per-IP. The per-account limit is the lockout below; the two together stop
 # both a wide guess across many accounts and a deep guess at one.
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=_client_key)
 LOGIN_RATE = "10/minute"
 
 GENERIC_FAILURE = "Incorrect email address or password."

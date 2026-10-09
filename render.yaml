@@ -33,7 +33,7 @@ services:
     startCommand: >-
       alembic -c backend/identity/alembic.ini upgrade head &&
       (python -m backend.identity.seed || true) &&
-      uvicorn backend.main:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 120
+      uvicorn backend.main:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 120 --no-proxy-headers
 
     healthCheckPath: /api/health
 

@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .identity import (
     admin_audit, admin_import, admin_provisioning, admin_roles, admin_tools,
@@ -226,6 +227,15 @@ if os.environ.get("MAEC_DEV"):
         allow_headers=["*"],
     )
 
+# Truly last, so truly outermost: every layer above — the guard, the login
+# rate limit, the audit writer, SecureSessionCookie — sees the visitor's
+# address and scheme rather than the proxy's. uvicorn's own middleware, with
+# Core's own trusted list (TRUSTED_PROXIES, OPEN-DECISIONS #6): X-Forwarded-For
+# and X-Forwarded-Proto are believed only from those peers. Run uvicorn with
+# --no-proxy-headers so this is the only list; its default applies a second
+# one, FORWARDED_ALLOW_IPS, which could disagree with this.
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=identity_config.trusted_proxies())
+
 app.include_router(router_auth.router)
 app.include_router(router_admin.router)
 app.include_router(admin_roles.router)
@@ -307,7 +317,9 @@ def run() -> None:
         raise SystemExit(1)
 
     print("MAEC One Core is running at http://127.0.0.1:8000   (Ctrl+C to stop)")
-    uvicorn.run(app, host="127.0.0.1", port=8000, timeout_keep_alive=120)
+    # proxy_headers off: Core applies its own trusted list (TRUSTED_PROXIES)
+    uvicorn.run(app, host="127.0.0.1", port=8000, timeout_keep_alive=120,
+                proxy_headers=False)
 
 
 if __name__ == "__main__":

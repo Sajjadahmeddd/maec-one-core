@@ -141,6 +141,42 @@ def database_url() -> str:
     return url
 
 
+def trusted_proxies() -> list[str]:
+    """The proxies whose X-Forwarded-For and X-Forwarded-Proto Core believes.
+
+    Only a request whose socket peer is on this list has its client address
+    and scheme taken from those headers; from anyone else they are ignored,
+    because anyone can send them. Core reads the result through
+    `security.client_ip`, never the header itself. OPEN-DECISIONS #6.
+
+    `TRUSTED_PROXIES`, comma-separated addresses or CIDR ranges. Default
+    127.0.0.1: an nginx on the same machine. In Docker, nginx reaches Core from
+    a container address such as 172.18.0.5, so production must name the Docker
+    network's range (e.g. 172.18.0.0/16) or every visitor shares the proxy's
+    address — one login rate limit for the whole company.
+
+    `*` is refused: trusting every peer is the same as trusting the header.
+    """
+    import ipaddress
+
+    raw = os.environ.get("TRUSTED_PROXIES", "").strip() or "127.0.0.1"
+    entries = [item.strip() for item in raw.split(",") if item.strip()]
+    for entry in entries:
+        if entry == "*":
+            raise RuntimeError(
+                "TRUSTED_PROXIES may not be '*': that believes X-Forwarded-For from "
+                "anyone, which is anyone choosing their own address.")
+        try:
+            if "/" in entry:
+                ipaddress.ip_network(entry, strict=False)
+            else:
+                ipaddress.ip_address(entry)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"TRUSTED_PROXIES entry {entry!r} is not an IP address or CIDR range.") from exc
+    return entries
+
+
 def session_secret() -> str:
     """Key that signs the session cookie.
 
