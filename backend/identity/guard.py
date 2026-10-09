@@ -16,6 +16,11 @@ Three properties hold whatever is added to the table:
   active account, no password change outstanding, then what the route
   requires, then the CSRF header on a mutation. A route cannot skip the
   interstitial checks by being mounted somewhere convenient.
+* **CSRF on every mutation that rides on the session**, not only under
+  /api/admin. Sibling subdomains are same-site, so SameSite=Lax does not stop
+  a page on another *.mirageaec.com host from posting with the shared cookie
+  attached (OPEN-DECISIONS #19). The only exemptions are the routes that take
+  credentials instead of a session: signing in, and the token endpoint.
 * **The table matches the application.** A test walks the registered routes
   and fails if a route has no row or a row has no route, so the table cannot
   drift into a second, stale copy of the routing table.
@@ -133,6 +138,12 @@ NO_SESSION = frozenset({Access.PUBLIC, Access.CLIENT_CREDENTIALS})
 SAFE_METHODS = frozenset({"GET", "HEAD"})
 MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
+# Mutations that take credentials rather than a session, and so need no CSRF
+# header: a cross-site page cannot make the request act as someone it has no
+# password or client secret for. Every other mutation sent with a session
+# cookie must carry the header. CLIENT_CREDENTIALS routes are exempt by kind.
+CREDENTIAL_ROUTES = frozenset({"/api/auth/login"})
+
 # Derived from the table rather than kept beside it, so the exception has one
 # definition. may_read_audit reads this, and a test pins it to exactly four.
 ADMIN_READER_PATHS = frozenset(
@@ -179,6 +190,14 @@ def may_read_audit(path: str, method: str) -> bool:
     return _normal(path) in ADMIN_READER_PATHS and method in SAFE_METHODS
 
 
+def _needs_csrf(request: Request, path: str, access: Access) -> bool:
+    """Does this request change something on the strength of a session cookie?"""
+    return (request.method in MUTATING
+            and access is not Access.CLIENT_CREDENTIALS
+            and _normal(path) not in CREDENTIAL_ROUTES
+            and security.session_id(request) is not None)
+
+
 def _refuse(status: int, detail: str) -> JSONResponse:
     return JSONResponse({"detail": detail}, status_code=status)
 
@@ -205,6 +224,11 @@ def inspect(request: Request) -> JSONResponse | RedirectResponse | None:
     if access is None:
         return _refuse(404, "Not found.")
     if access in NO_SESSION:
+        # A public route that changes something on behalf of whoever the
+        # cookie names — sign-out, change-password — needs the header too.
+        # No cookie, nothing to forge: sign-out with no session just answers.
+        if _needs_csrf(request, path, access) and not security.csrf_ok(request):
+            return _refuse(403, "Missing or invalid CSRF token.")
         return None
     page = access is Access.SESSION_PAGE
 
@@ -252,6 +276,9 @@ def inspect(request: Request) -> JSONResponse | RedirectResponse | None:
                 audit(db, actor=user, action="admin.csrf", target_type="route",
                       target_id=path, source="api", result="blocked", request=request)
                 return _refuse(403, "Missing or invalid CSRF token.")
+        elif _needs_csrf(request, path, access) and not security.csrf_ok(request):
+            # any other session route that changes something
+            return _refuse(403, "Missing or invalid CSRF token.")
         return None
     except Exception as exc:
         # Whatever went wrong, the answer is no — and is said out loud. This

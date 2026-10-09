@@ -113,6 +113,7 @@ def test_a_created_user_can_actually_sign_in(admin_client, db, identity):
                                     "password": NEW_PASSWORD})
     assert signed_in.status_code == 200
     assert signed_in.json()["must_change_password"] is True
+    csrf = {CSRF_HEADER: signed_in.json()["csrf_token"]}
 
     # ...but nothing else works until the password is theirs. Asked of a
     # guarded Core path: the original asked /api/airsizer/config, which is
@@ -121,7 +122,7 @@ def test_a_created_user_can_actually_sign_in(admin_client, db, identity):
     assert refused.status_code == 403
     assert refused.json()["detail"] == "Password change required."
 
-    changed = newcomer.post("/api/auth/change-password", json={
+    changed = newcomer.post("/api/auth/change-password", headers=csrf, json={
         "current_password": NEW_PASSWORD, "new_password": CHANGED})
     assert changed.status_code == 200, changed.text
     assert changed.json()["must_change_password"] is False
@@ -139,10 +140,12 @@ def test_the_old_password_stops_working_after_the_change(admin_client, db, ident
     from backend.main import app
     person = make_user(admin_client).json()
     client = TestClient(app)
-    client.post("/api/auth/login", json={"email": person["email"], "password": NEW_PASSWORD})
-    client.post("/api/auth/change-password", json={
+    csrf = {CSRF_HEADER: client.post("/api/auth/login", json={
+        "email": person["email"], "password": NEW_PASSWORD}).json()["csrf_token"]}
+    changed = client.post("/api/auth/change-password", headers=csrf, json={
         "current_password": NEW_PASSWORD, "new_password": CHANGED})
-    client.post("/api/auth/logout")
+    # a new session came with the new password, and with it a new token
+    client.post("/api/auth/logout", headers={CSRF_HEADER: changed.json()["csrf_token"]})
 
     assert client.post("/api/auth/login", json={
         "email": person["email"], "password": NEW_PASSWORD}).status_code == 401
@@ -155,8 +158,9 @@ def test_changing_a_password_needs_the_current_one(admin_client, db, identity):
     from backend.main import app
     person = make_user(admin_client).json()
     client = TestClient(app)
-    client.post("/api/auth/login", json={"email": person["email"], "password": NEW_PASSWORD})
-    r = client.post("/api/auth/change-password", json={
+    csrf = {CSRF_HEADER: client.post("/api/auth/login", json={
+        "email": person["email"], "password": NEW_PASSWORD}).json()["csrf_token"]}
+    r = client.post("/api/auth/change-password", headers=csrf, json={
         "current_password": "Wrong@12345", "new_password": CHANGED})
     assert r.status_code == 403
     assert "current password" in r.json()["detail"]
@@ -167,8 +171,9 @@ def test_the_new_password_must_meet_the_policy(admin_client, db, identity):
     from backend.main import app
     person = make_user(admin_client).json()
     client = TestClient(app)
-    client.post("/api/auth/login", json={"email": person["email"], "password": NEW_PASSWORD})
-    r = client.post("/api/auth/change-password", json={
+    csrf = {CSRF_HEADER: client.post("/api/auth/login", json={
+        "email": person["email"], "password": NEW_PASSWORD}).json()["csrf_token"]}
+    r = client.post("/api/auth/change-password", headers=csrf, json={
         "current_password": NEW_PASSWORD, "new_password": "alllower1"})
     assert r.status_code == 422
     assert "uppercase" in r.json()["detail"]
@@ -178,8 +183,9 @@ def test_the_new_password_must_differ(admin_client, db, identity):
     from backend.main import app
     person = make_user(admin_client).json()
     client = TestClient(app)
-    client.post("/api/auth/login", json={"email": person["email"], "password": NEW_PASSWORD})
-    r = client.post("/api/auth/change-password", json={
+    csrf = {CSRF_HEADER: client.post("/api/auth/login", json={
+        "email": person["email"], "password": NEW_PASSWORD}).json()["csrf_token"]}
+    r = client.post("/api/auth/change-password", headers=csrf, json={
         "current_password": NEW_PASSWORD, "new_password": NEW_PASSWORD})
     assert r.status_code == 422
 
