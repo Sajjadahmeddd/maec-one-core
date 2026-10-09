@@ -39,6 +39,21 @@ from .resolution import (  # noqa: F401  (re-exported)
 )
 
 GLOBAL_ADMIN = "global_admin"
+BUSINESS_ADMIN = "business_admin"
+
+
+def is_builtin(role: Role, key: str | None = None) -> bool:
+    """Is this one of the system roles the seed creates — optionally, that one?
+
+    A key alone is not enough. A custom role's key is derived from the name an
+    administrator typed, so a custom "Global Admin" once carried the key
+    `global_admin` and passed every check that compared keys: held at
+    platform scope it was a real Global Admin, and a "Business Admin" with no
+    permissions at all reached the audit log. A built-in role is shared by
+    every organisation (no org) and was not made from the panel (not custom).
+    """
+    return (role is not None and role.org_id is None and not role.is_custom
+            and (key is None or role.key == key))
 
 # What an audit row records when there is genuinely nobody to name: a login
 # attempt that supplied no address at all. Every other path has an actor.
@@ -115,7 +130,7 @@ def holds_business_admin(db: Session, user: User) -> bool:
     try:
         if not organization_active(db, user):
             return False
-        return any(g.role.key == "business_admin" for g in active_roles(db, user))
+        return any(is_builtin(g.role, BUSINESS_ADMIN) for g in active_roles(db, user))
     except Exception as exc:
         fail_closed('holds_business_admin', exc)
         return False
@@ -128,7 +143,7 @@ def is_global_admin(db: Session, user: User) -> bool:
     # panel through this. OPEN-DECISIONS #14.
     try:
         for grant in active_roles(db, user):
-            if grant.scope_type == "platform" and grant.role.key == GLOBAL_ADMIN:
+            if grant.scope_type == "platform" and is_builtin(grant.role, GLOBAL_ADMIN):
                 return True
         return False
     except Exception as exc:

@@ -29,7 +29,7 @@ from .models import (
 )
 from .permissions import (
     GLOBAL_ADMIN, active_roles, audit, bump_permissions_version, can,
-    is_global_admin, now,
+    is_builtin, is_global_admin, now,
 )
 
 
@@ -54,7 +54,8 @@ def global_admin_holders(db: Session) -> list[User]:
     """Every active account currently holding global_admin at platform."""
     rows = db.scalars(
         select(UserRole).join(Role).where(
-            Role.key == GLOBAL_ADMIN, UserRole.scope_type == "platform")).all()
+            Role.key == GLOBAL_ADMIN, Role.org_id.is_(None), Role.is_custom.is_(False),
+            UserRole.scope_type == "platform")).all()
     holders: dict[uuid.UUID, User] = {}
     for grant in rows:
         if grant.expires_at is not None:
@@ -66,7 +67,7 @@ def global_admin_holders(db: Session) -> list[User]:
 
 
 def _is_global_admin_grant(grant: UserRole) -> bool:
-    return grant.scope_type == "platform" and grant.role.key == GLOBAL_ADMIN
+    return grant.scope_type == "platform" and is_builtin(grant.role, GLOBAL_ADMIN)
 
 
 def _would_remove_last_admin(db: Session, user: User) -> bool:

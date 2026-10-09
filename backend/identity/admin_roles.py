@@ -128,6 +128,36 @@ def _holder_counts(db: Session) -> dict[uuid.UUID, int]:
     return {role_id: count for role_id, count in rows}
 
 
+def _normal_name(name: str) -> str:
+    """How two role names are compared: trimmed, inner runs of space collapsed,
+    case folded — so " global  ADMIN " is "global admin"."""
+    return " ".join(name.split()).casefold()
+
+
+def _key_for(name: str) -> str:
+    """The key a custom role gets from its name: "Senior Engineer" →
+    senior_engineer."""
+    return "_".join(name.split()).lower()[:60]
+
+
+def _refuse_builtin_lookalike(db: Session, name: str) -> None:
+    """A custom role may not share a name or a key with a built-in one.
+
+    Built-ins are no longer recognised by key alone (permissions.is_builtin),
+    so a look-alike can no longer act as one. It is refused anyway: two roles
+    called "Global Admin" on the same screen is a trap for whoever assigns
+    them next, and the CSV import names roles by key.
+    """
+    wanted_name, wanted_key = _normal_name(name), _key_for(name).casefold()
+    for role in db.scalars(select(Role).where(
+            Role.org_id.is_(None), Role.is_custom.is_(False))).all():
+        if wanted_name in (_normal_name(role.name), _normal_name(role.key.replace("_", " ")))                 or wanted_key == role.key.casefold():
+            raise HTTPException(
+                status_code=409,
+                detail=f"{name.strip()!r} is the name of the built-in role {role.name}. "
+                       "Choose a different name for a custom role.")
+
+
 def _editable(db: Session, role: Role, actor: User) -> Role:
     """System roles are shared by every organisation and are not editable
     from a tenant's admin panel. A custom role must belong to the caller."""
@@ -203,9 +233,10 @@ def list_roles(db: Session = Depends(get_db),
 def create_role(body: RoleCreate, request: Request, db: Session = Depends(get_db),
                 actor: User = Depends(require_global_admin)):
     """+ Add Custom Role — a copy of an existing role, owned by this org."""
-    key = body.name.strip().lower().replace(" ", "_")[:60]
+    key = _key_for(body.name)
     if not key:
         raise HTTPException(status_code=422, detail="A name is required.")
+    _refuse_builtin_lookalike(db, body.name)
     if db.scalar(select(Role).where(Role.org_id == actor.org_id, Role.key == key)):
         raise HTTPException(status_code=409, detail=f"A role named {body.name!r} already exists.")
 
@@ -256,6 +287,10 @@ def patch_role(role_id: uuid.UUID, body: RolePatch, request: Request,
 
     registry = {p.key: p for p in _registry(db)}
     before = {"name": role.name, "description": role.description}
+    if body.name is not None:
+        if not body.name.strip():
+            raise HTTPException(status_code=422, detail="A name is required.")
+        _refuse_builtin_lookalike(db, body.name)
 
     # Every change is checked before anything is written. A refusal audits
     # with its own commit on the session this route shares, so a rename or an

@@ -34,8 +34,8 @@ from . import config, security
 from .db import get_db
 from .models import Application, AuditLog, User
 from .permissions import (
-    ANONYMOUS_ACTOR, active_roles, holds_business_admin, is_global_admin,
-    require_user,
+    ANONYMOUS_ACTOR, BUSINESS_ADMIN, active_roles, holds_business_admin,
+    is_builtin, is_global_admin, require_user,
 )
 from . import router_auth
 
@@ -50,7 +50,6 @@ PAGE_SIZE_MAX = 200
 EXPORT_MAX = 50_000
 RESULTS = ("success", "warning", "blocked")
 
-BUSINESS_ADMIN = "business_admin"
 
 # Excel and LibreOffice treat a cell starting with any of these as a formula.
 FORMULA_LEADERS = ("=", "+", "-", "@", "\t", "\r")
@@ -89,7 +88,7 @@ def visible_applications(db: Session, user: User) -> set[uuid.UUID] | None:
     if is_global_admin(db, user):
         return None
     keys = {g.scope_id for g in active_roles(db, user)
-            if g.role.key == BUSINESS_ADMIN and g.scope_type == "application"}
+            if is_builtin(g.role, BUSINESS_ADMIN) and g.scope_type == "application"}
     if not keys:
         return set()
     rows = db.scalars(select(Application.id).where(Application.key.in_(keys))).all()
