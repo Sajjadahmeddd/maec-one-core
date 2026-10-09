@@ -935,7 +935,7 @@ routes they guard; this entry is why they are what they are.
 | Limit | Value | Keyed on | Where |
 |---|---|---|---|
 | Sign-in | 10 a minute | client address (#6) | `router_auth.LOGIN_RATE` |
-| Account lockout | 5 failures, then 1 min doubling to 30 min | the account | `router_auth.LOCK_*` |
+| Account lockout | 5 failures, then 1 min doubling to 30 min, fixed window | the account | `router_auth.LOCK_*` |
 | Token endpoint, per address | 120 a minute | client address (#6) | `router_oidc.TOKEN_RATE_PER_IP` |
 | Token endpoint, per client | 240 a minute | the *proven* client | `router_oidc.TOKEN_RATE_PER_CLIENT` |
 
@@ -944,7 +944,7 @@ per process. Two instances would each allow the full amount — acceptable at
 one instance; a shared store is the change if Core ever runs two.
 
 **The token endpoint.** Every call verifies a client secret with argon2, on
-purpose, so a refusal costs what a success costs (#17's constant-work rule).
+purpose, so a refusal costs what a success costs (`oauth.authenticate_client`).
 Unthrottled, that was the cheapest way to burn Core's CPU.
 
 * *Per address, before any secret is checked.* This is the limit that bounds
@@ -959,3 +959,35 @@ Unthrottled, that was the cheapest way to burn Core's CPU.
 * *Throttled calls are not audited.* A refusal that writes a row per attempt
   hands a flood a second thing to fill. The calls that are judged — 401, 400,
   200 — are audited as before.
+
+**The lockout is a fixed window (E5).** Five failures lock an account for a
+minute, doubling with each further failure up to thirty. A failure while the
+account is already locked is counted and audited, but never moves the end of
+the lock. Before, each such attempt re-armed it.
+
+**What a fixed window does not stop — read this before calling it fixed.**
+The failure count only resets on a successful sign-in. So once an account has
+five failures, the first failure after a window ends starts the next lock,
+at the escalated length — thirty minutes from the tenth failure on. Anyone
+who knows an address can still keep that account shut, at the cost of about
+two requests an hour, from any address. The fixed window removes the
+extension *inside* a lock; it does not remove the denial of service, which is
+what any lock on the account alone allows.
+
+**To close it, a choice for a person, not a patch:**
+
+* *Lock the pair, not the account:* count failures per (account, client
+  address). An attacker locks themselves out; the owner, signing in from
+  their own address, is unaffected. Costs a table (or a keyed counter) and
+  weakens the defence against a distributed guess at one account, which the
+  per-account count is there for.
+* *Let the right password through a lock from a known browser:* a device the
+  person has signed in from before (a long-lived, signed "known device"
+  marker) may still sign in during a lock. The standard shape; more to build.
+* *Leave it:* the per-address rate limit (10 a minute) and argon2 already
+  make guessing slow, and an administrator can clear a lock. Acceptable while
+  the user base is one company.
+
+Recommended when it matters: the second. Until then, an administrator's
+password reset clears a lock (`accounts.set_password`), and so does the seed's
+recovery switch (E6).

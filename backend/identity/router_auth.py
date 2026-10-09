@@ -46,6 +46,12 @@ GENERIC_FAILURE = "Incorrect email address or password."
 
 # Escalating lockout. After this many failures the account locks for a
 # minute, doubling with each further failure, up to the cap.
+#
+# A fixed window: a failure while the account is already locked is counted
+# and audited, but never moves the end of the lock. Before, each such attempt
+# re-armed the lock, so one guess every half hour held an account shut for
+# as long as anyone liked. What a fixed window does not stop — a single
+# failure just after it ends locks again — is OPEN-DECISIONS #20.
 LOCK_AFTER = 5
 LOCK_BASE = timedelta(minutes=1)
 LOCK_CAP = timedelta(minutes=30)
@@ -179,7 +185,7 @@ def login(request: Request, payload: dict, db: Session = Depends(get_db)):
         if user is not None:
             user.failed_login_count = (user.failed_login_count or 0) + 1
             newly_locked = False
-            if user.failed_login_count >= LOCK_AFTER:
+            if user.failed_login_count >= LOCK_AFTER and not locked:
                 user.locked_until = moment + _lock_for(user.failed_login_count)
                 newly_locked = True
             audit(db, actor=user, action="login.failed", target_type="user",
