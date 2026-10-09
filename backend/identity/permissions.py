@@ -173,6 +173,12 @@ def load(db: Session, user: User, app_key: str) -> ResolutionInput:
         Subscription.org_id == user.org_id,
         Subscription.application_id == app.id)))
 
+    # The grants in force that can bear on this application. An
+    # application-scoped grant for another application never covers a request
+    # here — resolution.covers() would drop it — so it is left out of the
+    # input altogether rather than carried into a token for an audience it
+    # says nothing about (Prompt 9a, E7). Platform, organisation and project
+    # grants stay: each can reach a request made in this application.
     moment = now()
     grants = tuple(
         Grant(role_id=str(grant.role_id), role_key=role_key,
@@ -182,7 +188,8 @@ def load(db: Session, user: User, app_key: str) -> ResolutionInput:
             select(UserRole, Role.key)
             .join(Role, Role.id == UserRole.role_id)
             .where(UserRole.user_id == user.id)).all()
-        if grant.expires_at is None or _utc(grant.expires_at) > moment
+        if (grant.expires_at is None or _utc(grant.expires_at) > moment)
+        and not (grant.scope_type == "application" and grant.scope_id != app_key)
     )
 
     role_ids = {uuid.UUID(g.role_id) for g in grants}

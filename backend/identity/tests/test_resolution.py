@@ -162,10 +162,18 @@ def lapsed_subscription(db):
     db.scalar(select(Subscription)).valid_to = datetime.now(timezone.utc) - timedelta(days=1)
 
 
+def a_grant_for_another_application(db):
+    """A wider role held for Timesheet. It must change nothing in Engineering
+    Tools — and since E7 it is not even in the input."""
+    engineer = _user(db, ENGINEER_EMAIL)
+    db.add(UserRole(user_id=engineer.id, role_id=_role(db, "business_admin").id,
+                    scope_type="application", scope_id="timesheet"))
+
+
 SCENARIOS = [seeded, project_scoped_deny, every_tool_rule_level,
              tied_roles_one_restricted, edit_on_a_role_that_configures,
              expired_grant, organization_scoped_grant, suspended_organisation,
-             no_seat, lapsed_subscription]
+             no_seat, lapsed_subscription, a_grant_for_another_application]
 
 EXTRA_KEYS = ["engineering:hapext:teleport", "timesheet:sheet:view",
               "not-a-key", "engineering::view"]
@@ -272,3 +280,29 @@ def test_a_token_body_for_engineering_carries_nothing_about_another_application(
     keys = {k for effects in claims["role_permissions"].values() for k in effects}
     assert keys and all(k.startswith("engineering:") for k in keys)
     assert all(rule["module_key"] != "sheet" for rule in claims["tool_rules"])
+
+
+def test_a_token_carries_no_grant_scoped_to_another_application(db):
+    """E7: an application-scoped grant for Timesheet says nothing about
+    Engineering Tools, so an Engineering Tools token does not carry it — nor
+    the permissions of a role held only through it. Platform, organisation
+    and project grants still travel: each can reach a request made here."""
+    engineer = _user(db, ENGINEER_EMAIL)
+    lead = _role(db, "business_admin")
+    db.add(UserRole(user_id=engineer.id, role_id=lead.id,
+                    scope_type="application", scope_id="timesheet"))
+    db.add(UserRole(user_id=engineer.id, role_id=_role(db, "project_lead").id,
+                    scope_type="project", scope_id="P-2291"))
+    db.commit()
+
+    claims = to_claims(load(db, engineer, "engineering"))
+    carried = {(g["role"], g["scope_type"], g["scope_id"]) for g in claims["grants"]}
+    assert ("business_admin", "application", "timesheet") not in carried
+    assert ("employee", "application", "engineering") in carried
+    assert ("project_lead", "project", "P-2291") in carried
+    assert str(lead.id) not in claims["role_permissions"]
+
+    # the admin's platform grant still travels in their own token
+    admin_claims = to_claims(load(db, _user(db, ADMIN_EMAIL), "engineering"))
+    assert ("global_admin", "platform", None) in {
+        (g["role"], g["scope_type"], g["scope_id"]) for g in admin_claims["grants"]}
