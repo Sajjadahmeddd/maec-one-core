@@ -94,8 +94,10 @@ hosts.
 wins over the file, so a deployment with no `.env` is unaffected.
 
 The seed is idempotent and safe to run on every boot. It never overwrites an
-existing password — set `SEED_RESET_PASSWORDS=1` for a single run to re-apply
-`BOOTSTRAP_ADMIN_PASSWORD` if an admin is locked out of their own account.
+existing password or clears a lock. If an admin is locked out of their own
+account, set `SEED_RESET_PASSWORDS=1` for a single run: it re-applies
+`BOOTSTRAP_ADMIN_PASSWORD`, clears the failed-attempt count and any lockout,
+and signs out the sessions minted under the old password. Then unset it.
 
 ## Tests
 

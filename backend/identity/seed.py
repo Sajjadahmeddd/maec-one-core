@@ -15,7 +15,8 @@ run changes nothing. It is safe to run on every deploy, which is what the
 Render start command does.
 
 Existing passwords are LEFT ALONE. Set SEED_RESET_PASSWORDS=1 to re-apply the
-bootstrap password — the recovery path for a lost admin account. It is opt-in
+bootstrap password and clear any lockout — the recovery path for a lost or
+locked-out admin account. It is opt-in
 because this runs on every boot, and a restart must never quietly undo a
 password somebody has since changed.
 """
@@ -30,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import config  # noqa: F401  (loads .env)
-from . import security
+from . import security, sessions
 from .db import session_factory
 from .models import (
     Application, Organization, Permission, Role, RolePermission, Subscription,
@@ -199,10 +200,21 @@ def _user(db, org, email, password, display_name, made, *, reset: bool) -> User:
         db.add(user)
         db.flush()
         made("users")
-    elif reset and not security.verify_password(password, user.password_hash):
-        user.password_hash = security.hash_password(password)
+    elif reset:
+        # The recovery path for an administrator who cannot get in: the
+        # password, and whatever lock their failed attempts left behind —
+        # re-applying a password to an account that stays locked for another
+        # half hour recovers nothing.
+        if not security.verify_password(password, user.password_hash):
+            user.password_hash = security.hash_password(password)
+            # as any password change does: sessions minted under the old one end
+            sessions.revoke_all(db, user.id)
+            made("password resets")
+        if user.failed_login_count or user.locked_until is not None:
+            user.failed_login_count = 0
+            user.locked_until = None
+            made("lockouts cleared")
         db.flush()
-        made("password resets")
     return user
 
 
@@ -248,7 +260,8 @@ def main() -> int:
     else:
         print("seed: nothing to do — everything was already in place")
     if reset:
-        print("seed: SEED_RESET_PASSWORDS was set — bootstrap passwords re-applied.")
+        print("seed: SEED_RESET_PASSWORDS was set — bootstrap passwords re-applied "
+              "and lockouts cleared.")
     print(f"seed: Global Admin is {admin_email}"
           + (f"; test engineer is {test_email}" if test_email and test_password else ""))
     return 0
