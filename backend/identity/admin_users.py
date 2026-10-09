@@ -263,7 +263,9 @@ def grant_role(user_id: uuid.UUID, body: RoleGrant, request: Request,
                actor: User = Depends(require_global_admin)):
     target = _target(db, actor, user_id)
     role = db.get(Role, body.role_id)
-    if role is None:
+    # Another organisation's custom role is unknown here, the same answer the
+    # provisioning screen gives; accounts.may_grant refuses it for every caller.
+    if role is None or (role.org_id is not None and role.org_id != target.org_id):
         raise HTTPException(status_code=422, detail="Unknown role.")
     if body.scope_type not in ("platform", "organization", "application", "project"):
         raise HTTPException(status_code=422, detail="Unknown scope type.")

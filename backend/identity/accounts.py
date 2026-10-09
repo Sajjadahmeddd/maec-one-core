@@ -116,6 +116,11 @@ def may_grant(db: Session, *, actor: User, target_org_id, role: Role,
     """
     if target_org_id != actor.org_id and not is_global_admin(db, actor):
         return "actor and target are in different organisations"
+    # A custom role belongs to one organisation and means nothing in another:
+    # its permissions were chosen there, and its holders are that tenant's.
+    # Only a built-in role (no organisation) may be held anywhere.
+    if role.org_id is not None and role.org_id != target_org_id:
+        return "that role belongs to another organisation"
     if not _administers(db, actor, role, scope_type, scope_id):
         return "actor does not administer that scope"
     if is_global_admin(db, actor):
