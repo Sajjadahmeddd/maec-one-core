@@ -23,6 +23,7 @@ const ACTION_GROUPS = [
   ['tool_rule.', 'Tool rules'],
   ['admin.', 'Refused admin access'],
   ['app.', 'Refused product access'],
+  ['oauth.', 'Application sign-in (OIDC)'],
 ]
 
 const WINDOWS = [[null, 'All time'], [1, 'Last 24 hours'], [7, 'Last 7 days'],
@@ -54,7 +55,11 @@ export default function AuditScreen() {
   const [error, setError] = useState('')
   const [open, setOpen] = useState(null)
 
-  const [filters, setFilters] = useState({ q: '', action: '', result: '', days: 30 })
+  // platform: events that belong to no organisation — failed sign-ins for
+  // unknown addresses, refused client credentials. Global Admin only.
+  const [filters, setFilters] = useState({
+    q: '', action: '', result: '', days: 30, platform: false,
+  })
   const [page, setPage] = useState(1)
 
   const load = useCallback(() => {
@@ -101,6 +106,15 @@ export default function AuditScreen() {
           </p>
         )}
 
+        {data.platform && (
+          <p className="maec-note">
+            Platform events belong to no organisation: sign-in attempts for
+            addresses with no account, applications that failed to prove who
+            they are, and clients registered from the command line. The cards
+            above still count this organisation&apos;s events.
+          </p>
+        )}
+
         {stats && (
           <div className="maec-stats">
             <Card label={`Events (${stats.window_days} days)`} value={stats.events} />
@@ -116,6 +130,14 @@ export default function AuditScreen() {
 
       <div className="maec-card">
         <div className="maec-toolbar">
+          {data.can_see_platform && (
+            <select className="maec-select" value={filters.platform ? 'platform' : 'org'}
+                    aria-label="Whose events"
+                    onChange={(e) => change({ platform: e.target.value === 'platform' })}>
+              <option value="org">This organisation</option>
+              <option value="platform">Platform events</option>
+            </select>
+          )}
           <input className="maec-search" placeholder="Search actor or target…"
                  value={filters.q} onChange={(e) => change({ q: e.target.value })} />
           <select className="maec-select" value={filters.action}

@@ -95,11 +95,29 @@ def visible_applications(db: Session, user: User) -> set[uuid.UUID] | None:
     return set(rows)
 
 
+def require_platform_reader(db: Session, user: User, platform: bool) -> None:
+    """Platform events are a Global Admin's alone.
+
+    A row with no organisation is one nobody's tenant owns: a failed sign-in
+    for an address no account has, a calling service that could not prove
+    itself, a client registered from the command line. They were written and
+    then shown to nobody, because every read filtered by the reader's
+    organisation — so a password-spraying run against made-up addresses was
+    invisible. A Business Admin's reach is their own applications; these are
+    not theirs, and asking is refused rather than quietly answered empty.
+    """
+    if platform and not is_global_admin(db, user):
+        raise HTTPException(status_code=403,
+                            detail="Platform events are visible to Global Admins only.")
+
+
 # ------------------------------------------------------------------ the query
 def _filtered(db: Session, user: User, *, q: str = "", action: str = "",
               result: str = "", since: datetime | None = None,
-              until: datetime | None = None) -> Select:
-    where = [AuditLog.org_id == user.org_id]
+              until: datetime | None = None, platform: bool = False) -> Select:
+    # Either this organisation's events, or — for a Global Admin who asks —
+    # the platform's: rows that belong to no organisation at all.
+    where = [AuditLog.org_id.is_(None) if platform else AuditLog.org_id == user.org_id]
 
     allowed = visible_applications(db, user)
     if allowed is not None:
@@ -158,11 +176,17 @@ def list_audit(request: Request, db: Session = Depends(get_db),
                action: str = Query(default="", max_length=80),
                result: str = Query(default=""),
                days: int | None = Query(default=None, ge=1, le=3650),
+               platform: bool = Query(default=False),
                page: int = Query(default=1, ge=1),
                page_size: int = Query(default=50, ge=1, le=PAGE_SIZE_MAX)):
-    """The log, newest first. Filtered and paged in the database."""
+    """The log, newest first. Filtered and paged in the database.
+
+    `platform=true` (Global Admin only) shows the events that belong to no
+    organisation instead of this organisation's."""
+    require_platform_reader(db, user, platform)
     since = (datetime.now(timezone.utc) - timedelta(days=days)) if days else None
-    query = _filtered(db, user, q=q, action=action, result=result, since=since)
+    query = _filtered(db, user, q=q, action=action, result=result, since=since,
+                      platform=platform)
 
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = db.scalars(
@@ -177,6 +201,9 @@ def list_audit(request: Request, db: Session = Depends(get_db),
         "page_size": page_size,
         "pages": max(1, ceil(total / page_size)),
         "scoped": visible_applications(db, user) is not None,
+        "platform": platform,
+        # whether to offer the Platform events filter at all
+        "can_see_platform": is_global_admin(db, user),
         "results": list(RESULTS),
     }
 
@@ -284,10 +311,13 @@ def export_audit(db: Session = Depends(get_db),
                  q: str = Query(default="", max_length=200),
                  action: str = Query(default="", max_length=80),
                  result: str = Query(default=""),
-                 days: int | None = Query(default=None, ge=1, le=3650)):
+                 days: int | None = Query(default=None, ge=1, le=3650),
+                 platform: bool = Query(default=False)):
     """The filtered log as CSV, capped so one click cannot pull the table."""
+    require_platform_reader(db, user, platform)
     since = (datetime.now(timezone.utc) - timedelta(days=days)) if days else None
-    query = _filtered(db, user, q=q, action=action, result=result, since=since)
+    query = _filtered(db, user, q=q, action=action, result=result, since=since,
+                      platform=platform)
     rows = db.scalars(query.order_by(AuditLog.created_at.desc())
                       .limit(EXPORT_MAX)).all()
     apps = {a.id: a for a in db.scalars(select(Application)).all()}
@@ -309,6 +339,6 @@ def export_audit(db: Session = Depends(get_db),
         io.BytesIO(buffer.getvalue().encode("utf-8-sig")),
         media_type="text/csv",
         headers={"Content-Disposition":
-                 f'attachment; filename="MAEC_audit_{stamp}.csv"',
+                 f'attachment; filename="MAEC_audit_{"platform_" if platform else ""}{stamp}.csv"',
                  "X-Audit-Rows": str(len(rows))},
     )
