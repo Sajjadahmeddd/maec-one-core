@@ -9,7 +9,7 @@
 // below is a convenience — the API refuses what this person may not do
 // regardless of what the browser renders.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 
 import ChangePassword from './maecone/ChangePassword.jsx'
@@ -18,26 +18,22 @@ import Login from './maecone/Login.jsx'
 import AdminShell from './maecone/admin/AdminShell.jsx'
 import { SESSION_EXPIRED, auth as authApi } from './maecone/api'
 import { INTERNAL } from './maecone/MaecOne.jsx'
+import { safeNext } from './maecone/next.js'
 
 /** A Global Admin lands in the panel; everyone else on the launcher. */
 const homeFor = (session) => (session?.is_global_admin ? '/admin' : '/')
 
 /**
- * Where to go once signed in, when Core's authorize endpoint sent the browser
- * here first. The guard redirects an unsigned or must-change-password visitor
- * to `/?next=<the authorize URL>`; after sign-in (and any password change) we
- * go back there, and the server re-checks everything.
- *
- * Only ever back to /oauth/authorize on this origin. Anything else in `next`
- * is dropped, so the parameter cannot be used to send someone elsewhere.
+ * The `next` this page was opened with, as given. Two things send a browser
+ * here with one: an app's gate, with the page the person asked for in that app
+ * (OPEN-DECISIONS #19), and Core's authorize endpoint. Whether it is followed
+ * is decided by safeNext() — a live app's exact origin, or /oauth/authorize on
+ * this one — once the catalogue of apps has arrived. Anything else goes to the
+ * launcher, so the parameter cannot be used to send someone elsewhere.
  */
-function authorizeReturn() {
+function rawNext() {
   try {
-    const raw = new URLSearchParams(window.location.search).get('next')
-    if (!raw) return null
-    const url = new URL(raw, window.location.origin)
-    if (url.origin !== window.location.origin || url.pathname !== '/oauth/authorize') return null
-    return url.pathname + url.search
+    return new URLSearchParams(window.location.search).get('next')
   } catch {
     return null
   }
@@ -47,22 +43,31 @@ export default function App() {
   const navigate = useNavigate()
 
   // read once: the address bar changes as soon as the client router navigates
-  const [next] = useState(authorizeReturn)
+  const [asked] = useState(rawNext)
 
   // null while we ask the server; then the payload from GET /api/auth/me
   const [session, setSession] = useState(null)
 
-  // Signed in, with no password change outstanding: finish the handoff.
+  // Where `next` may take us — judged against the live apps' addresses, which
+  // come with the session. null: no next, or one that is refused.
+  const next = useMemo(
+    () => (asked && session ? safeNext(asked, session.apps, window.location.origin) : null),
+    [asked, session],
+  )
+
+  // Signed in, with no password change outstanding: go back where they were.
   useEffect(() => {
     if (next && session?.authenticated && !session.must_change_password) {
       window.location.assign(next)
     }
   }, [next, session])
 
-  /** After sign-in or a password change: back to authorize, or home. */
+  /** After sign-in or a password change: back where they were, or — when the
+   *  `next` they came with was refused — the launcher, or else home. */
   const land = (who) => {
     setSession(who)
-    if (!next) navigate(homeFor(who), { replace: true })
+    if (asked && safeNext(asked, who.apps, window.location.origin)) return
+    navigate(asked ? '/' : homeFor(who), { replace: true })
   }
 
   useEffect(() => {
@@ -142,7 +147,8 @@ export default function App() {
           : <Navigate to="/" replace />
       } />
 
-      <Route path="*" element={<Navigate to={homeFor(session)} replace />} />
+      {/* A refused `next` lands on the launcher, wherever it arrived. */}
+      <Route path="*" element={<Navigate to={asked ? '/' : homeFor(session)} replace />} />
     </Routes>
   )
 }
