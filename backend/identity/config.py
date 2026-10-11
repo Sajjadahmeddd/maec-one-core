@@ -141,6 +141,60 @@ def database_url() -> str:
     return url
 
 
+def core_public_url(fallback: str | None = None) -> str | None:
+    """The address people type to reach Core: what a sign-in link starts with.
+
+    `CORE_PUBLIC_URL`, e.g. https://auth.mirageaec.com, or locally
+    http://auth.maec.local:8000. The gate builds its login links from it,
+    because the request in front of the gate comes from an app's server, and
+    that request's own host is not where a browser should be sent. Unset, the
+    caller's fallback is used.
+    """
+    from urllib.parse import urlsplit
+
+    value = os.environ.get("CORE_PUBLIC_URL", "").strip().rstrip("/")
+    if not value:
+        return fallback.rstrip("/") if fallback else None
+    parts = urlsplit(value)
+    if parts.scheme not in ("http", "https") or not parts.hostname or parts.query:
+        raise RuntimeError(
+            f"CORE_PUBLIC_URL must be an absolute http(s) address, not {value!r}.")
+    return value
+
+
+# Long enough that guessing one is not a plan: token_urlsafe(32) gives 43.
+MIN_GATE_SECRET = 32
+
+
+def gate_secrets() -> dict[str, str]:
+    """Each app's gate secret, by application key: `GATE_SECRETS`.
+
+        GATE_SECRETS=engineering=<long random string>,timesheet=<another>
+
+    The app's front door sends its secret with every check, so only that app's
+    server can ask Core about a browser's cookie. Generate one with
+    `python -c "import secrets; print(secrets.token_urlsafe(32))"`. A malformed
+    entry or a short secret refuses to start rather than leaving an app with a
+    gate anyone could open.
+    """
+    raw = os.environ.get("GATE_SECRETS", "").strip()
+    secrets_by_app: dict[str, str] = {}
+    for entry in (item.strip() for item in raw.split(",") if item.strip()):
+        key, sep, secret = entry.partition("=")
+        key, secret = key.strip(), secret.strip()
+        if not sep or not key or not secret:
+            raise RuntimeError(
+                f"GATE_SECRETS entry {key or entry!r} must look like app_key=secret.")
+        if len(secret) < MIN_GATE_SECRET:
+            raise RuntimeError(
+                f"GATE_SECRETS: the secret for {key!r} is shorter than "
+                f"{MIN_GATE_SECRET} characters.")
+        if key in secrets_by_app:
+            raise RuntimeError(f"GATE_SECRETS names {key!r} twice.")
+        secrets_by_app[key] = secret
+    return secrets_by_app
+
+
 def trusted_proxies() -> list[str]:
     """The proxies whose X-Forwarded-For and X-Forwarded-Proto Core believes.
 

@@ -21,6 +21,15 @@ import os
 os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
 os.environ["SESSION_SECRET"] = "test-only-session-secret"
 
+# Settings a developer's .env sets for running the real thing, and which would
+# otherwise leak into every test: with SESSION_COOKIE_DOMAIN=.maec.local the
+# test client's cookies are dropped, and a real gate secret would be what the
+# gate tests run against. Pinned empty here — an empty variable still wins
+# over .env — and each test that needs one sets it.
+for _name in ("SESSION_COOKIE_DOMAIN", "GATE_SECRETS", "CORE_PUBLIC_URL",
+              "TRUSTED_PROXIES", "SESSION_ABSOLUTE_HOURS", "SESSION_IDLE_MINUTES"):
+    os.environ[_name] = ""
+
 # A signing key made for this run, so the suite never signs with — or
 # publishes — the developer's key from .env.
 from cryptography.hazmat.primitives import serialization  # noqa: E402
