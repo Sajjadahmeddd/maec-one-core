@@ -56,6 +56,11 @@ class Access(str, Enum):
     # and no cookie — and no CSRF header; the route authenticates the service
     # by its client credentials, in constant work, before it does anything.
     CLIENT_CREDENTIALS = "client_credentials"
+    # An app's front door asking about a browser's cookie (OPEN-DECISIONS #19).
+    # The guard reads nothing and refuses nothing: the cookie belongs to the
+    # person the question is *about*, not to the caller, and the route runs
+    # its own checks in its own order — the app's secret first.
+    GATE = "gate"
     # An active account that has cleared every interstitial check.
     SESSION = "session"
     # SESSION, for a page a browser navigates to rather than an API a script
@@ -89,6 +94,10 @@ ROUTES: dict[str, Access] = {
     "/oauth/authorize": Access.SESSION_PAGE,
     # Called by a product's backend with its client secret, never by a browser.
     "/oauth/token": Access.CLIENT_CREDENTIALS,
+
+    # The gate: an app's server asking whether a browser may come in. Not under
+    # /api/auth, whose rows are PUBLIC for a different reason.
+    "/api/gate/check": Access.GATE,
 
     # FastAPI's generated documentation describes the admin API, so it is not
     # handed to strangers.
@@ -133,7 +142,7 @@ ROUTES: dict[str, Access] = {
 RESERVED = ("/api", "/oauth", "/.well-known")
 
 # Routes the guard lets through without reading a session.
-NO_SESSION = frozenset({Access.PUBLIC, Access.CLIENT_CREDENTIALS})
+NO_SESSION = frozenset({Access.PUBLIC, Access.CLIENT_CREDENTIALS, Access.GATE})
 
 SAFE_METHODS = frozenset({"GET", "HEAD"})
 MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
