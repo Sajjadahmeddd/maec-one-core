@@ -111,6 +111,8 @@ hosts.
 | `SESSION_COOKIE_DOMAIN` | The session cookie's Domain. Production `.mirageaec.com`, so every app's gate receives it; local `.maec.local`. Unset keeps a host-only cookie. Not a URL — a bare domain, or Core refuses to start. |
 | `SESSION_ABSOLUTE_HOURS` | Longest a session lives, however busy. Default `10`. |
 | `SESSION_IDLE_MINUTES` | How long a session survives with no request. Default `120`. A value that is set but not a positive number refuses to start. |
+| `CORE_PUBLIC_URL` | The address people type to reach Core — what the gate's sign-in links start with. Production `https://auth.mirageaec.com`; local `http://auth.maec.local:8000`. Unset, the gate falls back to the address its caller used, which is usually wrong. |
+| `GATE_SECRETS` | Each app's gate secret: `engineering=<secret>`, comma-separated for more. 32+ characters (`python -c "import secrets; print(secrets.token_urlsafe(32))"`). The same value goes into that app's own settings. A malformed entry refuses to start. |
 | `TRUSTED_PROXIES` | Comma-separated addresses or CIDR ranges whose `X-Forwarded-For` / `X-Forwarded-Proto` Core believes. Default `127.0.0.1`. **In Docker set it to the network's range** (e.g. `127.0.0.1,172.18.0.0/16`), or every visitor shares nginx's address and one login rate limit. `*` is refused. |
 | `OIDC_PRIVATE_KEY` | The RSA key (PEM, 2048 bits or more) that signs tokens. Never in the database. Locally, an ephemeral key is generated if unset, and its tokens stop verifying at restart. On Render the service **refuses to start** without it. One line with literal `\n` is accepted. |
 | `OIDC_KEY_ID` | The key's id in JWKS. A new id for every new key — Core refuses to start if an id is already published with a different key. Unset, the key's RFC 7638 thumbprint is used. |
@@ -135,13 +137,60 @@ and signs out the sessions minted under the old password. Then unset it.
 .venv/Scripts/python -m pytest
 ```
 
-463 tests. 444 run against an in-memory SQLite; 19 run against the PostgreSQL
+491 tests. 472 run against an in-memory SQLite; 19 run against the PostgreSQL
 in your `.env` and cover what SQLite cannot — column widths, CHECK
 constraints, the append-only trigger, the migrations run up and down with data
 present, real concurrency on single-use authorization codes, and a session
 revoked on one connection being refused on another at once. Those 19 skip
 themselves if no PostgreSQL is configured — a green run with them skipped has
-not tested any of that.
+not tested any of that. One more runs the sign-in page's `next` allowlist —
+the open-redirect surface — under Node (`node --test
+frontend/src/maecone/next.test.js`), so Node must be installed.
+
+## The gate — how an app lets people in
+
+`GET /api/gate/check` answers one question for an app's server: who does this
+browser's cookie belong to, and may they use this app? (`OPEN-DECISIONS.md`
+#19.) The app sends, on every request a person makes to it:
+
+| Header | Contents |
+|---|---|
+| `X-MAEC-App` | its application key, e.g. `engineering` |
+| `X-MAEC-Gate-Secret` | its secret from `GATE_SECRETS` |
+| `X-Original-URL` | the full URL the person asked for |
+| `X-Original-Method` | that request's method |
+| `X-Original-Origin` | the browser's `Origin` header, if it sent one |
+| `Cookie` | the browser's cookie, unchanged |
+
+Core checks, in order, and stops at the first failure: the secret and that the
+app is live (403 `bad_app`); for anything but GET/HEAD/OPTIONS, that the
+`Origin` is exactly the app's own `base_url` origin (403 `bad_origin`); a valid
+session (401 `not_signed_in`); an active account (401 `not_signed_in`); no
+password change outstanding (401 `password_change`); an active organisation
+(403 `org_suspended`); a seat on the app (403 `no_access`).
+
+Yes is 200:
+
+```json
+{"user": {"id": "…", "email": "…", "name": "…"},
+ "org_id": "…",
+ "permissions": ["engineering:hapext:convert", "…"],
+ "nav_hidden": ["hapaudit"]}
+```
+
+No is 401 or 403 with `{"reason": "…", "login_url": "…"}`. On a page request
+the app sends the browser to `login_url`; on an API call it returns the status
+and the app's frontend does. The link comes back to the exact page after
+sign-in — the sign-in page follows `next` only to a live app's own origin.
+
+The app checks `permissions` for each action itself, and leaves the
+`nav_hidden` modules out of its navigation. For the cookie to reach the app at
+all, both must be under `SESSION_COOKIE_DOMAIN`, and the app's `base_url` must
+be set:
+
+```sql
+UPDATE applications SET base_url = 'http://et.maec.local:8080' WHERE key = 'engineering';
+```
 
 ## The launcher
 
