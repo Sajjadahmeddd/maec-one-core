@@ -205,7 +205,7 @@ def test_a_mutation_from_another_origin_is_refused(gate, db, method):
     for origin in (None, "http://evil.maec.local:8080", "http://et.maec.local:8081",
                    "https://et.maec.local:8080", "null"):
         _refused(ask(cookie, method=method, origin=origin), 403, "bad_origin")
-    assert _rows(db, "gate.bad_origin") == 5
+    assert _rows(db, "gate.bad_origin") == 1, "one row per address, app and ten minutes"
 
 
 def test_a_mutation_from_the_apps_own_pages_goes_through(gate):

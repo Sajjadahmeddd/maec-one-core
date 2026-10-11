@@ -32,6 +32,7 @@ from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from limits import parse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -40,6 +41,7 @@ from .db import get_db
 from .models import Application, AuditLog, Permission, User
 from .permissions import audit, entitled, load, load_user, organization_active
 from .resolution import HIDES_FROM_NAV, now, resolve
+from .router_auth import limiter
 
 router = APIRouter(tags=["gate"])
 log = logging.getLogger("maec.identity")
@@ -56,6 +58,21 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # app's every request reaches this check, and a person without a seat who
 # keeps clicking must not become a row per click.
 NO_ACCESS_AUDIT_EVERY = timedelta(hours=1)
+
+# A caller that cannot prove it is the app — a wrong or missing secret — is
+# answered 429 once it has failed this often from one address, and is not
+# audited while it is. Only those failures count. Every other refusal (not
+# signed in, no seat, a bad origin) comes from the app's own server, the one
+# address every user's request arrives from; counting them would let anyone
+# throttle the app for everybody. A call with the right secret is never
+# limited, so a successful check never is. OPEN-DECISIONS #20.
+GATE_FAILURES_PER_ADDRESS = "30/minute"
+
+# A refusal of a caller — a wrong secret, a bad origin — is audited at most once
+# per client address, per app, per ten minutes. The log can never be cleaned
+# (it is append-only), so a row per anonymous call would let a script grow it
+# without end.
+BAD_CALL_AUDIT_EVERY = timedelta(minutes=10)
 
 # What an audit row names when the caller is an app's server that could not
 # prove itself, or a request refused before any session was read. No "@", so
@@ -101,6 +118,31 @@ def _refuse(request: Request, status: int, reason: str, app_key: str) -> JSONRes
              request.headers.get(METHOD_HEADER, "GET")[:10], status)
     return JSONResponse({"reason": reason, "login_url": _login_url(request, reason)},
                         status_code=status, headers=NO_STORE)
+
+
+def _too_many_failures(request: Request) -> bool:
+    """Count one failed call from this address; True once over the limit."""
+    if not limiter.enabled:
+        return False
+    address = security.client_ip(request) or "unknown"
+    return not limiter.limiter.hit(parse(GATE_FAILURES_PER_ADDRESS), "gate.failure", address)
+
+
+def _audit_bad_call(db: Session, request: Request, action: str, app_key: str,
+                    app: Application | None, after: dict | None = None) -> None:
+    """Record a refused caller — unless this address already has a row for
+    this app and this refusal within the last ten minutes."""
+    address = security.client_ip(request)
+    target = app_key[:120] or None
+    recent = db.scalar(select(AuditLog.id).where(
+        AuditLog.action == action,
+        AuditLog.target_id == target if target else AuditLog.target_id.is_(None),
+        AuditLog.ip == address if address else AuditLog.ip.is_(None),
+        AuditLog.created_at >= now() - BAD_CALL_AUDIT_EVERY).limit(1))
+    if recent is None:
+        audit(db, actor_email=GATE_ACTOR, action=action, target_type="application",
+              target_id=target, application_id=app.id if app else None, source="gate",
+              result="blocked", request=request, after=after)
 
 
 def _audit_no_access_once_an_hour(db: Session, request: Request, user: User,
@@ -156,10 +198,12 @@ def check(request: Request, db: Session = Depends(get_db)):
     app = db.scalar(select(Application).where(Application.key == app_key)) if app_key else None
     if not secret_ok or app is None or app.status != "live":
         if not secret_ok:
-            audit(db, actor_email=GATE_ACTOR, action="gate.bad_secret",
-                  target_type="application", target_id=app_key[:120] or None,
-                  application_id=app.id if app else None, source="gate",
-                  result="blocked", request=request)
+            if _too_many_failures(request):
+                log.info("gate: too many failed calls from one address (app %r)",
+                         app_key[:40])
+                return JSONResponse({"reason": "too_many_failures"}, status_code=429,
+                                    headers={**NO_STORE, "Retry-After": "60"})
+            _audit_bad_call(db, request, "gate.bad_secret", app_key, app)
         return _refuse(request, 403, "bad_app", app_key)
 
     # 2. Request forgery. Sibling subdomains are same-site, so the cookie rides
@@ -170,10 +214,8 @@ def check(request: Request, db: Session = Depends(get_db)):
         own = origin_of(app.base_url)
         sent = request.headers.get(ORIGIN_HEADER, "").strip()
         if own is None or sent != own:
-            audit(db, actor_email=GATE_ACTOR, action="gate.bad_origin",
-                  target_type="application", target_id=app.key, application_id=app.id,
-                  source="gate", result="blocked", request=request,
-                  after={"method": method[:10], "origin": sent[:200] or None})
+            _audit_bad_call(db, request, "gate.bad_origin", app.key, app,
+                            after={"method": method[:10], "origin": sent[:200] or None})
             return _refuse(request, 403, "bad_origin", app_key)
 
     # 3. The session — read, never cleared: this response goes to the app's

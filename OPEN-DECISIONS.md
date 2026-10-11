@@ -938,6 +938,9 @@ routes they guard; this entry is why they are what they are.
 | Account lockout | 5 failures, then 1 min doubling to 30 min, fixed window | the account | `router_auth.LOCK_*` |
 | Token endpoint, per address | 120 a minute | client address (#6) | `router_oidc.TOKEN_RATE_PER_IP` |
 | Token endpoint, per client | 240 a minute | the *proven* client | `router_oidc.TOKEN_RATE_PER_CLIENT` |
+| Gate, failed calls | 30 a minute | client address — wrong or missing secret only | `router_gate.GATE_FAILURES_PER_ADDRESS` |
+| Gate, audit rows for refused callers | 1 per address, app and refusal, per 10 minutes | client address | `router_gate.BAD_CALL_AUDIT_EVERY` |
+| Gate, audit rows for `no_access` | 1 per person and app, per hour | the person | `router_gate.NO_ACCESS_AUDIT_EVERY` |
 
 All four share one switch and one store (`router_auth.limiter`), in memory,
 per process. Two instances would each allow the full amount — acceptable at
@@ -959,6 +962,21 @@ Unthrottled, that was the cheapest way to burn Core's CPU.
 * *Throttled calls are not audited.* A refusal that writes a row per attempt
   hands a flood a second thing to fill. The calls that are judged — 401, 400,
   200 — are audited as before.
+
+**The gate (#19).** Found in review: every call with a wrong secret wrote one
+audit row, and the log is append-only — two hundred anonymous calls, two
+hundred permanent rows, with nothing to stop a script. Two separate limits now:
+
+* *Audit rows* for a refused caller (`gate.bad_secret`, `gate.bad_origin`): at
+  most one per client address, per app, per ten minutes. Checked against the
+  log itself, not the in-memory limiter, so it holds across restarts, across
+  instances, and with the limiter switched off.
+* *Failed calls*: a wrong or missing secret, 30 a minute per address, then 429
+  `too_many_failures` with no audit row. **Only** those count. Every other
+  refusal — not signed in, no seat, a forged form's bad origin — arrives from
+  the app's own server, the one address every user's request comes through;
+  counting them would let anyone throttle an app for everybody. A call with
+  the right secret is never limited, so a successful check never is.
 
 **The lockout is a fixed window (E5).** Five failures lock an account for a
 minute, doubling with each further failure up to thirty. A failure while the

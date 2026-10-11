@@ -45,6 +45,12 @@ FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 # request, rather than serving a JWKS nothing can be verified against.
 keys.signing_key()
 
+# The gate's settings, read now for the same reason: a malformed GATE_SECRETS
+# or CORE_PUBLIC_URL stops Core starting, with the reason, rather than turning
+# every gate check — every request of every app — into a 500.
+identity_config.gate_secrets()
+identity_config.core_public_url()
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
