@@ -12,8 +12,14 @@
 #                      └─ et.mirageaec.com ───▶ 127.0.0.1:8081 ─▶ Engineering Tools
 #   an app's backend ── http://maec-core:8000/api/gate/check ─▶ core  (maec_core_net)
 #
-# Core starts first and depends on no app. It OWNS maec_core_net; each app's
-# compose file joins it as an external network to reach http://maec-core:8000.
+# Core starts first and depends on no app. maec_core_net, the network Core
+# shares with the apps, belongs to no stack: it is created ONCE on the host,
+# before Core's first start, and Core and every app join it as external —
+#
+#   docker network create --subnet 10.231.1.0/24 --gateway 10.231.1.1 maec_core_net
+#
+# so no stack's `docker compose down` can take it from the others. Core still
+# owns maec_core_private, its own network with its database.
 # ProManage, and the old Engineering Tools stack, are untouched. Nothing here
 # publishes a port to the internet: Caddy on the host terminates TLS and
 # reaches Core through loopback.
@@ -22,8 +28,10 @@
 # outside Docker's default pools (172.17-172.31.x.x, 192.168.x.x) and away
 # from the old Engineering Tools stack's 172.30.57.0/24:
 #
-#   maec_core_private  10.231.0.0/24  Core and its database only; internal
-#   maec_core_net      10.231.1.0/24  Core and the apps that call the gate
+#   maec_core_private  10.231.0.0/24  Core and its database only; internal;
+#                                     created and removed with this stack
+#   maec_core_net      10.231.1.0/24  Core and the apps that call the gate;
+#                                     created once, by hand, outside every stack
 #
 # Before the first start, check nothing on the host already uses 10.231.x.x:
 #   ip route; docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}'
@@ -49,7 +57,7 @@ services:
       # internal network carries no published traffic, so its gateway is not
       # listed.) An app on maec_core_net has an address from .2 up, so it is
       # never trusted to say who a visitor is. OPEN-DECISIONS #6, #21. Change
-      # this with maec_core_net's gateway below, together.
+      # this with maec_core_net's gateway (the network create command), together.
       TRUSTED_PROXIES: "127.0.0.1,10.231.1.1"
     ports:
       # Loopback only. Docker's port publishing sits in front of ufw, so a bare
@@ -100,14 +108,12 @@ networks:
         - subnet: 10.231.0.0/24
           gateway: 10.231.0.1
   maec_core_net:
-    # Core's, created by this file. Apps join it as external:
-    #   networks: { maec_core_net: { external: true, name: maec_core_net } }
+    # Shared, and no stack's: created once on the host before Core first starts,
+    #   docker network create --subnet 10.231.1.0/24 --gateway 10.231.1.1 maec_core_net
+    # and joined here, and by every app, as external. Its range and gateway are
+    # set by that command, which is why they are not repeated here.
+    external: true
     name: maec_core_net
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 10.231.1.0/24
-          gateway: 10.231.1.1
 
 volumes:
   core_db:

@@ -169,8 +169,21 @@ grep -n '<' deploy/env.production | grep -v '^[0-9]*:#' || echo "no placeholders
 cp -n deploy/compose.example.yml deploy/compose.yml
 # Makes the server's compose file from the example. -n: never overwrites.
 
+docker network inspect maec_core_net >/dev/null 2>&1 && echo "maec_core_net EXISTS - do not create it again" || echo "maec_core_net is absent"
+# Checks first, as its own step, for the network Core and the apps share.
+# Absent is what you expect on the first run.
+
+docker network create --subnet 10.231.1.0/24 --gateway 10.231.1.1 maec_core_net
+# Creates that shared network — ONCE, by hand, outside every stack, so no
+# stack owns it. Skip this line if the check above said it exists.
+
+docker network inspect maec_core_net --format '{{range .IPAM.Config}}{{.Subnet}} gateway {{.Gateway}}{{end}}'
+# Must print "10.231.1.0/24 gateway 10.231.1.1". Core trusts that gateway as
+# Caddy's address (TRUSTED_PROXIES); any other range and you must stop.
+
 docker compose -f deploy/compose.yml --env-file deploy/env.production up -d --build
-# Builds Core and starts it with its own PostgreSQL. It needs no other app.
+# Builds Core and starts it with its own PostgreSQL, joined to maec_core_net.
+# It needs no app. It creates its own private network, maec_core_private.
 
 docker compose -f deploy/compose.yml --env-file deploy/env.production ps
 # Shows both containers. Wait until core reads "(healthy)" — under a minute.
@@ -342,8 +355,8 @@ nano .env.maec
 
 ```bash
 docker compose up -d --build
-# Builds and starts the new stack on 127.0.0.1:8081. Core must already be
-# running: this joins Core's network, maec_core_net.
+# Builds and starts the new stack on 127.0.0.1:8081, joined to maec_core_net
+# (created in 3d). Core must already be running for the gate to answer.
 
 docker compose ps
 # Wait until every container reads "(healthy)" or "Up".
@@ -425,23 +438,25 @@ sudo systemctl reload caddy
 
 ## 8. The checks
 
-In an **incognito / private window**, so no old cookie interferes. The same
-five checks as prompt 10, Part C, now on the real addresses:
+In a **fresh incognito / private window**, so no old cookie interferes. Sign
+in as an ordinary person with an Engineering Tools seat — not the admin.
 
-1. **Sign in, land back.** Open `https://et.mirageaec.com/` → you are sent to
-   `https://auth.mirageaec.com/?next=…` → sign in as an engineer with a seat
-   → you land back on Engineering Tools, on the page you asked for.
-2. **No second sign-in.** Open another Engineering Tools page in a new tab of
-   the same window → it opens directly.
-3. **No seat, no entry.** In the admin panel (a different browser), remove
-   that engineer's Engineering Tools seat → their next click in Engineering
-   Tools shows "no access". Give the seat back → their next click works.
-4. **One sign-out, everywhere.** Sign out at `https://auth.mirageaec.com` →
-   the next click in Engineering Tools sends them to sign in again.
-5. **The launcher.** At `https://auth.mirageaec.com`, the Engineering Tools
-   tile opens `https://et.mirageaec.com` and lets them straight in.
+1. **Sign in, land back.** Open `https://et.mirageaec.com`: you're sent to the
+   MAEC One login. Sign in, and you land back in Engineering Tools.
+2. **The tool works.** A HAP PDF converts to CSV.
+3. **Already signed in at MAEC One.** Open `https://auth.mirageaec.com` in a
+   new tab: you're already signed in.
+4. **No seat, no access.** As admin, in a *different browser*, remove the
+   person's Engineering Tools seat (**Users & Access**, "Remove seat"). Refresh
+   Engineering Tools: "No access". Give the seat back ("Assign seat").
+5. **One sign-out.** Sign out at MAEC One. Refresh Engineering Tools: you're
+   sent to the login.
 
 All five pass: you are live. Any one fails: step 9, now.
+
+Optional sixth, once the five pass: sign in again at `https://auth.mirageaec.com`
+and click the **Engineering Tools** tile — it opens `https://et.mirageaec.com`
+and lets you straight in.
 
 ---
 
@@ -494,6 +509,16 @@ docker compose -f deploy/compose.yml --env-file deploy/env.production logs --tai
 
 docker compose -f deploy/compose.yml --env-file deploy/env.production up -d
 # Starts whatever is stopped. Engineering Tools recovers on its next request.
+```
+
+`docker compose … down` on Core stops Core and its database and removes
+`maec_core_private`, but **no longer removes `maec_core_net`**: that network
+belongs to no stack, and the apps stay attached to it while Core is away.
+`up -d` rejoins it. Remove it by hand only when no stack uses it at all:
+
+```bash
+docker network inspect maec_core_net --format '{{range .Containers}}{{.Name}} {{end}}'
+# Lists the containers still attached. Remove the network only if this is empty.
 ```
 
 ---

@@ -1042,11 +1042,16 @@ existed — and the new Engineering Tools stack has a different one.
 | Network | Range | Gateway | Who is on it |
 |---|---|---|---|
 | `maec_core_private` | 10.231.0.0/24 | 10.231.0.1 | Core and its PostgreSQL. `internal`: no route out. |
-| `maec_core_net` | 10.231.1.0/24 | 10.231.1.1 | Core (alias `maec-core`) and each app's backend. |
+| `maec_core_net` | 10.231.1.0/24 | 10.231.1.1 | Core (alias `maec-core`) and each app's backend. Created once, outside every stack. |
 
-* **Core starts first and depends on no app.** It creates both networks, with
-  fixed names. Each app's compose file joins `maec_core_net` as an external
-  network and calls `http://maec-core:8000/api/gate/check`.
+* **Core starts first and depends on no app.** It creates and owns
+  `maec_core_private`. The shared `maec_core_net` belongs to **no** stack:
+  it is created once on the host, before Core's first start —
+  `docker network create --subnet 10.231.1.0/24 --gateway 10.231.1.1 maec_core_net` — and Core and every app join it as external, calling
+  `http://maec-core:8000/api/gate/check`. Changed in the Prompt 12 follow-up:
+  owned by Core's compose project, a `docker compose down` on Core would have
+  removed it — or failed to, with apps still attached — and every app's join
+  depended on Core's project having created it.
 * **The database is not on the shared network.** An app joined to
   `maec_core_net` cannot resolve `core-db`, and cannot reach its address.
 * **Ranges** are outside Docker's default address pools (172.17–172.31.x.x

@@ -98,9 +98,11 @@ proxies `/api` to `:8000`.
 `deploy/compose.example.yml` runs Core and its own PostgreSQL beside the
 existing VPS setup without touching it. Core is published on `127.0.0.1:8001`
 only, for the host's Caddy (`auth.mirageaec.com { reverse_proxy
-localhost:8001 }`). It starts first and depends on no app: it **owns**
-`maec_core_net` (10.231.1.0/24), and each app's compose file joins that as an
-external network to reach the gate at `http://maec-core:8000`. The database
+localhost:8001 }`). It starts first and depends on no app. The network it
+shares with the apps, `maec_core_net` (10.231.1.0/24), belongs to no stack: it
+is created once on the host, before Core's first start —
+`docker network create --subnet 10.231.1.0/24 --gateway 10.231.1.1 maec_core_net` — and Core and each app join it as external, reaching the gate at
+`http://maec-core:8000`. No stack's `docker compose down` removes it. The database
 sits on `maec_core_private` (10.231.0.0/24, internal) with Core alone; an app
 cannot even resolve it. `TRUSTED_PROXIES` is `127.0.0.1,10.231.1.1` — the
 gateway Caddy's traffic arrives from, never the range apps live in
