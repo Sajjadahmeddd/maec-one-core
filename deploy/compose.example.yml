@@ -1,0 +1,92 @@
+# MAEC One Core on the VPS — Core and its own PostgreSQL. An example: copy it to
+# deploy/compose.yml on the server and adjust the marked lines.
+#
+#   cp deploy/compose.example.yml deploy/compose.yml
+#   cp deploy/env.production.example deploy/env.production   # then fill it in
+#   chmod 600 deploy/env.production
+#   docker compose -f deploy/compose.yml --env-file deploy/env.production up -d --build
+#
+# It sits beside what is already there and changes none of it:
+#
+#   Caddy (host, :443) ── auth.mirageaec.com ──────▶ 127.0.0.1:8001 ─▶ core :8000
+#                      └─ engineeringtools.… ─────▶ 127.0.0.1:80   ─▶ ET's nginx
+#   ET's backend ── http://maec-core:8000/api/gate/check ─▶ core   (Docker network)
+#
+# Engineering Tools' stack is the compose project "maec" (its network is
+# maec_maec_net); ProManage is untouched. Nothing here publishes a port to
+# the internet: Caddy on the host terminates TLS and reaches Core through
+# loopback, the way it already reaches Engineering Tools.
+
+name: maec-core
+
+services:
+  core:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: maec-core:latest
+    restart: unless-stopped
+    env_file: env.production
+    environment:
+      # Built here from the same file the database reads, so the password is
+      # written once. Use a hex password (openssl rand -hex 24): no character
+      # in it needs escaping in a URL.
+      DATABASE_URL: "postgresql+psycopg://maec_core:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env.production}@core-db:5432/maec_identity"
+      # Whose X-Forwarded-For / -Proto Core believes. Caddy reaches Core through
+      # the published loopback port, which Docker delivers from this network's
+      # gateway — an address inside CORE_NET_SUBNET. Kept beside the subnet it
+      # must match, so the two cannot drift. OPEN-DECISIONS #6.
+      TRUSTED_PROXIES: "127.0.0.1,${CORE_NET_SUBNET:-172.31.250.0/24}"
+    ports:
+      # Loopback only. Docker's port publishing sits in front of ufw, so a bare
+      # "8001:8000" would be reachable from the internet whatever the firewall
+      # says. Change 8001 if something on the host already holds it.
+      - "127.0.0.1:8001:8000"
+    depends_on:
+      core-db:
+        condition: service_healthy
+    networks:
+      core_net: {}
+      # Engineering Tools' backend calls the gate as http://maec-core:8000.
+      maec_net:
+        aliases: [maec-core]
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+  core-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: maec_identity
+      POSTGRES_USER: maec_core
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env.production}"
+    volumes:
+      - core_db:/var/lib/postgresql/data
+    # Never published: only Core, on core_net, can reach it.
+    networks: [core_net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U maec_core -d maec_identity"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+networks:
+  core_net:
+    driver: bridge
+    ipam:
+      config:
+        # A fixed range, so TRUSTED_PROXIES can name it. Check it is free first:
+        #   docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}'
+        - subnet: "${CORE_NET_SUBNET:-172.31.250.0/24}"
+  maec_net:
+    # Engineering Tools' network, created by its own compose project. Must
+    # exist before this starts: bring Engineering Tools up first.
+    external: true
+    name: maec_maec_net
+
+volumes:
+  core_db:

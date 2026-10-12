@@ -12,3 +12,8 @@ frontend/dist/
 .env
 .env.*
 !.env.example
+
+# ---- The server's real production settings (deploy/env.production.example
+#      is the committed template)
+deploy/env.production
+deploy/compose.yml

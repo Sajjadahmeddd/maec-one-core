@@ -1,0 +1,14 @@
+# Secrets never enter the image: configuration comes from the environment.
+.env
+.env.*
+deploy/env.production
+deploy/*.env
+
+# Version control, local tooling, build output — rebuilt inside the image.
+.git
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+frontend/node_modules
+frontend/dist

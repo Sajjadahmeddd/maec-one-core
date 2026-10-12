@@ -87,6 +87,36 @@ host. Map `auth.maec.local` (and each app's `*.maec.local` name) to
 For frontend work, `npm --prefix frontend run dev` serves on `:5173` and
 proxies `/api` to `:8000`.
 
+### Deploying
+
+`Dockerfile` builds one image: the API and the built frontend. It runs as
+`MAEC_ENV=production` unless told otherwise, so it refuses to start without
+`SESSION_SECRET` and `OIDC_PRIVATE_KEY`. On start it runs the migrations
+(fatal if they fail), the seed (best-effort), then uvicorn with
+`--no-proxy-headers` — Core applies its own trusted-proxy list.
+
+`deploy/compose.example.yml` runs Core and its own PostgreSQL beside the
+existing VPS setup without touching it: Core is published on `127.0.0.1:8001`
+only, for the host's Caddy (`auth.mirageaec.com { reverse_proxy
+localhost:8001 }`), and joins Engineering Tools' network as `maec-core`, so its
+backend reaches the gate at `http://maec-core:8000`. The database is never
+published. `TRUSTED_PROXIES` is built from `CORE_NET_SUBNET`, the fixed range of
+Core's own network, because that is the address Caddy's traffic arrives from.
+
+```bash
+cp deploy/compose.example.yml deploy/compose.yml
+cp deploy/env.production.example deploy/env.production   # fill in, on the server
+chmod 600 deploy/env.production
+docker compose -f deploy/compose.yml --env-file deploy/env.production up -d --build
+```
+
+`deploy/env.production.example` lists every production setting with the
+command that generates each secret. Generate them on the server; never reuse
+one that has been pasted anywhere. Keep `OIDC_PRIVATE_KEY` in single quotes —
+unquoted, Docker Compose turns its `\n` into line breaks and refuses the file.
+After the first sign-in, read `audit_logs.ip`: it should be your own public
+address, not `172.…` (`OPEN-DECISIONS.md` #6).
+
 ### Registering an application as an OIDC client
 
 ```bash
