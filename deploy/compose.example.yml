@@ -8,14 +8,25 @@
 #
 # It sits beside what is already there and changes none of it:
 #
-#   Caddy (host, :443) ── auth.mirageaec.com ──────▶ 127.0.0.1:8001 ─▶ core :8000
-#                      └─ engineeringtools.… ─────▶ 127.0.0.1:80   ─▶ ET's nginx
-#   ET's backend ── http://maec-core:8000/api/gate/check ─▶ core   (Docker network)
+#   Caddy (host, :443) ── auth.mirageaec.com ─▶ 127.0.0.1:8001 ─▶ core :8000
+#                      └─ et.mirageaec.com ───▶ 127.0.0.1:8081 ─▶ Engineering Tools
+#   an app's backend ── http://maec-core:8000/api/gate/check ─▶ core  (maec_core_net)
 #
-# Engineering Tools' stack is the compose project "maec" (its network is
-# maec_maec_net); ProManage is untouched. Nothing here publishes a port to
-# the internet: Caddy on the host terminates TLS and reaches Core through
-# loopback, the way it already reaches Engineering Tools.
+# Core starts first and depends on no app. It OWNS maec_core_net; each app's
+# compose file joins it as an external network to reach http://maec-core:8000.
+# ProManage, and the old Engineering Tools stack, are untouched. Nothing here
+# publishes a port to the internet: Caddy on the host terminates TLS and
+# reaches Core through loopback.
+#
+# Networks — fixed names and ranges, recorded in OPEN-DECISIONS #21. Both are
+# outside Docker's default pools (172.17-172.31.x.x, 192.168.x.x) and away
+# from the old Engineering Tools stack's 172.30.57.0/24:
+#
+#   maec_core_private  10.231.0.0/24  Core and its database only; internal
+#   maec_core_net      10.231.1.0/24  Core and the apps that call the gate
+#
+# Before the first start, check nothing on the host already uses 10.231.x.x:
+#   ip route; docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}'
 
 name: maec-core
 
@@ -32,11 +43,14 @@ services:
       # written once. Use a hex password (openssl rand -hex 24): no character
       # in it needs escaping in a URL.
       DATABASE_URL: "postgresql+psycopg://maec_core:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env.production}@core-db:5432/maec_identity"
-      # Whose X-Forwarded-For / -Proto Core believes. Caddy reaches Core through
-      # the published loopback port, which Docker delivers from this network's
-      # gateway — an address inside CORE_NET_SUBNET. Kept beside the subnet it
-      # must match, so the two cannot drift. OPEN-DECISIONS #6.
-      TRUSTED_PROXIES: "127.0.0.1,${CORE_NET_SUBNET:-172.31.250.0/24}"
+      # Whose X-Forwarded-For / -Proto Core believes: maec_core_net's GATEWAY,
+      # not its range. Caddy reaches Core through the published loopback port,
+      # which Docker delivers from that gateway — observed as 10.231.1.1. (The
+      # internal network carries no published traffic, so its gateway is not
+      # listed.) An app on maec_core_net has an address from .2 up, so it is
+      # never trusted to say who a visitor is. OPEN-DECISIONS #6, #21. Change
+      # this with maec_core_net's gateway below, together.
+      TRUSTED_PROXIES: "127.0.0.1,10.231.1.1"
     ports:
       # Loopback only. Docker's port publishing sits in front of ufw, so a bare
       # "8001:8000" would be reachable from the internet whatever the firewall
@@ -46,9 +60,9 @@ services:
       core-db:
         condition: service_healthy
     networks:
-      core_net: {}
-      # Engineering Tools' backend calls the gate as http://maec-core:8000.
-      maec_net:
+      core_private: {}
+      # Apps call the gate as http://maec-core:8000 on this network.
+      maec_core_net:
         aliases: [maec-core]
     logging:
       driver: json-file
@@ -63,8 +77,9 @@ services:
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env.production}"
     volumes:
       - core_db:/var/lib/postgresql/data
-    # Never published: only Core, on core_net, can reach it.
-    networks: [core_net]
+    # Never published, and only on the internal network: an app joined to
+    # maec_core_net cannot even resolve it.
+    networks: [core_private]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U maec_core -d maec_identity"]
       interval: 5s
@@ -75,18 +90,24 @@ services:
       options: { max-size: "20m", max-file: "5" }
 
 networks:
-  core_net:
+  core_private:
+    # Core and its database. Internal: no route out, nothing else on it.
+    name: maec_core_private
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.231.0.0/24
+          gateway: 10.231.0.1
+  maec_core_net:
+    # Core's, created by this file. Apps join it as external:
+    #   networks: { maec_core_net: { external: true, name: maec_core_net } }
+    name: maec_core_net
     driver: bridge
     ipam:
       config:
-        # A fixed range, so TRUSTED_PROXIES can name it. Check it is free first:
-        #   docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}'
-        - subnet: "${CORE_NET_SUBNET:-172.31.250.0/24}"
-  maec_net:
-    # Engineering Tools' network, created by its own compose project. Must
-    # exist before this starts: bring Engineering Tools up first.
-    external: true
-    name: maec_maec_net
+        - subnet: 10.231.1.0/24
+          gateway: 10.231.1.1
 
 volumes:
   core_db:

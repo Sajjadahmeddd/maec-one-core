@@ -96,12 +96,29 @@ proxies `/api` to `:8000`.
 `--no-proxy-headers` — Core applies its own trusted-proxy list.
 
 `deploy/compose.example.yml` runs Core and its own PostgreSQL beside the
-existing VPS setup without touching it: Core is published on `127.0.0.1:8001`
+existing VPS setup without touching it. Core is published on `127.0.0.1:8001`
 only, for the host's Caddy (`auth.mirageaec.com { reverse_proxy
-localhost:8001 }`), and joins Engineering Tools' network as `maec-core`, so its
-backend reaches the gate at `http://maec-core:8000`. The database is never
-published. `TRUSTED_PROXIES` is built from `CORE_NET_SUBNET`, the fixed range of
-Core's own network, because that is the address Caddy's traffic arrives from.
+localhost:8001 }`). It starts first and depends on no app: it **owns**
+`maec_core_net` (10.231.1.0/24), and each app's compose file joins that as an
+external network to reach the gate at `http://maec-core:8000`. The database
+sits on `maec_core_private` (10.231.0.0/24, internal) with Core alone; an app
+cannot even resolve it. `TRUSTED_PROXIES` is `127.0.0.1,10.231.1.1` — the
+gateway Caddy's traffic arrives from, never the range apps live in
+(`OPEN-DECISIONS.md` #21).
+
+An app joins Core's network in its own compose file:
+
+```yaml
+services:
+  backend:
+    networks: [default, maec_core_net]
+networks:
+  maec_core_net:
+    external: true
+    name: maec_core_net
+```
+
+The full go-live, step by step, is `deploy/RUNBOOK.md`.
 
 ```bash
 cp deploy/compose.example.yml deploy/compose.yml
@@ -115,7 +132,7 @@ command that generates each secret. Generate them on the server; never reuse
 one that has been pasted anywhere. Keep `OIDC_PRIVATE_KEY` in single quotes —
 unquoted, Docker Compose turns its `\n` into line breaks and refuses the file.
 After the first sign-in, read `audit_logs.ip`: it should be your own public
-address, not `172.…` (`OPEN-DECISIONS.md` #6).
+address, not `10.231.…` (`OPEN-DECISIONS.md` #6).
 
 ### Registering an application as an OIDC client
 
@@ -236,7 +253,7 @@ the person straight in.
 - `EXTRACTION-LOG.md` — what separating this from the product actually took,
   and what the boundary did not cover. Read this first if you are wondering
   why something is the way it is.
-- `OPEN-DECISIONS.md` — twenty entries, each with enough context to settle
+- `OPEN-DECISIONS.md` — twenty-one entries, each with enough context to settle
   or revisit it without re-deriving the argument. #19 is how apps sign in
   (read it first), #5 revocable sessions, #6 client addresses behind a proxy,
   #20 every rate limit and the lockout. #11 and #15–#18 are the dormant OIDC

@@ -1027,3 +1027,41 @@ address):
 browser that has signed in before (a "known device" marker). Stronger against
 the office case; more to build, and not needed while the user base is one
 company.
+
+---
+
+## 21. Core owns its network; apps join it — decided
+
+**Status:** decided in Prompt 12, replacing Prompt 11's arrangement, in which
+Core joined Engineering Tools' network (`maec_maec_net`) under the alias
+`maec-core`. That made Core unable to start until one particular app's network
+existed — and the new Engineering Tools stack has a different one.
+
+**Now** (`deploy/compose.example.yml`):
+
+| Network | Range | Gateway | Who is on it |
+|---|---|---|---|
+| `maec_core_private` | 10.231.0.0/24 | 10.231.0.1 | Core and its PostgreSQL. `internal`: no route out. |
+| `maec_core_net` | 10.231.1.0/24 | 10.231.1.1 | Core (alias `maec-core`) and each app's backend. |
+
+* **Core starts first and depends on no app.** It creates both networks, with
+  fixed names. Each app's compose file joins `maec_core_net` as an external
+  network and calls `http://maec-core:8000/api/gate/check`.
+* **The database is not on the shared network.** An app joined to
+  `maec_core_net` cannot resolve `core-db`, and cannot reach its address.
+* **Ranges** are outside Docker's default address pools (172.17–172.31.x.x
+  and 192.168.x.x), so no network Docker creates by itself can collide with
+  them, and away from the old Engineering Tools stack's 172.30.57.0/24. The
+  compose file says how to check nothing on the host already uses 10.231.x.x.
+
+**Trusted proxies: the gateway, not the range.** Caddy on the host reaches
+Core through the published loopback port, and Docker delivers that traffic
+from `maec_core_net`'s gateway — observed as **10.231.1.1** (Prompt 12, Docker
+29.8). So `TRUSTED_PROXIES=127.0.0.1,10.231.1.1`. Trusting the whole range
+would let any app on the shared network tell Core who a visitor is; an app's
+address is .2 or above, and a forged `X-Forwarded-For` from one was observed to
+be ignored. The internal network carries no published traffic, so its gateway
+is not listed.
+
+**What moves together:** a change to `maec_core_net`'s range changes its
+gateway, `TRUSTED_PROXIES`, and the range noted here.
