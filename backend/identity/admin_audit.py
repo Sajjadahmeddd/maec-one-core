@@ -268,12 +268,18 @@ def security_controls(db: Session = Depends(get_db),
              "label": f"Account locks after {router_auth.LOCK_AFTER} failures, "
                       "for escalating periods",
              "on": True, "where": "identity/router_auth.py"},
-            {"key": "csrf", "label": "Admin changes require a CSRF token",
+            {"key": "csrf",
+             "label": "Every change made with a session requires a CSRF token",
              "on": True, "where": "identity/guard.py"},
             {"key": "session",
-             "label": "Session cookie is host-only, HttpOnly, SameSite=Lax"
-                      + (", Secure" if config.on_render() else ""),
-             "on": True, "where": "backend/main.py"},
+             # read from the running configuration, not asserted
+             "label": "Session cookie is "
+                      + (f"shared across {config.session_cookie_domain()}"
+                         if config.session_cookie_domain() else "host-only")
+                      + ", HttpOnly, SameSite=Lax, Secure over https; "
+                      f"{config.session_absolute_hours():g} h, "
+                      f"{config.session_idle_minutes():g} min idle, revocable",
+             "on": True, "where": "backend/main.py, identity/sessions.py"},
             {"key": "append_only",
              "label": "Audit log is append-only in the database",
              "on": trigger if trigger is not None else False,

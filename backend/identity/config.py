@@ -39,6 +39,28 @@ load_dotenv(REPO_ROOT / ".env", override=False)
 SESSION_COOKIE = "maec_session"
 
 
+# ------------------------------------------------------------ environment
+def is_development() -> bool:
+    """Is this a developer's machine? Only `MAEC_ENV=development` says so.
+
+    Development is the one place Core may invent what it was not given: a
+    session secret and a signing key generated per process. Anywhere else
+    those fallbacks are bugs that hide — a generated session secret differs
+    per worker and signs people out at random; a generated signing key mints
+    tokens nothing else can verify — so Core refuses to start instead.
+
+    Unset, or any other value, is production. Fail safe: a deployment that
+    forgets the variable gets the refusals, not the fallbacks. This replaced a
+    check for Render's RENDER variable, which a VPS never sets — every
+    protection keyed on it was silently off there.
+    """
+    return os.environ.get("MAEC_ENV", "").strip().lower() == "development"
+
+
+def environment() -> str:
+    return "development" if is_development() else "production"
+
+
 def _positive_number(name: str, default: float) -> float:
     """A positive number from the environment, or the default when unset.
 
@@ -106,10 +128,10 @@ def session_cookie_options() -> dict:
         "session_cookie": SESSION_COOKIE,
         "max_age": SESSION_MAX_AGE,
         "same_site": "lax",
-        # Always Secure on Render. Everywhere else the cookie is marked Secure
-        # per request, whenever that request arrived over https — see
-        # main.SecureSessionCookie.
-        "https_only": on_render(),
+        # Never decided by platform: the cookie is marked Secure on every
+        # response to a request that arrived over https — directly, or
+        # through a trusted proxy's X-Forwarded-Proto. main.SecureSessionCookie.
+        "https_only": False,
         "domain": session_cookie_domain(),
     }
 
@@ -238,14 +260,14 @@ def session_secret() -> str:
     the value Render already generated keeps working until the dashboard is
     updated.
 
-    A generated fallback keeps local development frictionless. On Render it
-    is refused outright, because there it has two failure modes and the
-    second is vicious: every restart signs everyone out, and — the moment the
-    service runs more than one instance — each instance generates a
-    *different* secret. Requests round-robin, a session minted on one
-    instance fails to validate on another, and users are signed out at
-    apparently random intervals. Diagnosing that from the symptom is
-    miserable; refusing to boot says it in one line.
+    A generated fallback keeps local development frictionless, and is allowed
+    only there (`MAEC_ENV=development`). Anywhere else it is refused outright,
+    because it has two failure modes and the second is vicious: every restart
+    signs everyone out, and — with more than one worker or instance — each
+    generates a *different* secret. Requests round-robin, a session minted by
+    one fails to validate on another, and users are signed out at apparently
+    random intervals. Diagnosing that from the symptom is miserable; refusing
+    to boot says it in one line.
 
     This raises at import rather than at startup because `main.py` reads it
     while building the session middleware, which happens before the lifespan
@@ -256,22 +278,19 @@ def session_secret() -> str:
         value = os.environ.get(name, "").strip()
         if value:
             return value
-    if on_render():
+    if not is_development():
         raise RuntimeError(
-            "SESSION_SECRET is not set. Set it in the Render dashboard — "
-            "any long random string. Refusing to start rather than generate "
-            "one, because a generated secret differs per instance and signs "
-            "users out at random once the service scales past one."
+            "SESSION_SECRET is not set. Set it to any long random string "
+            "(python -c \"import secrets; print(secrets.token_urlsafe(48))\"). "
+            "Refusing to start rather than generate one, because a generated "
+            "secret differs per worker and signs users out at random. On a "
+            "developer's machine, set MAEC_ENV=development instead."
         )
     return secrets.token_urlsafe(32)
 
 
 def session_secret_configured() -> bool:
     return any(os.environ.get(n, "").strip() for n in ("SESSION_SECRET", "MAEC_SECRET_KEY"))
-
-
-def on_render() -> bool:
-    return bool(os.environ.get("RENDER"))
 
 
 # ------------------------------------------------------------------- OIDC
@@ -287,10 +306,11 @@ def oidc_private_key_pem() -> str | None:
     instances cannot vouch for; and a private key in a table is one SQL
     injection away from being read.
 
-    Refused outright on Render when absent, like SESSION_SECRET, and for the
-    same reason raised here rather than in a lifespan handler: `main.py`
-    reads it at import, so the refusal precedes any request. Locally None,
-    and keys.py generates an ephemeral key and says so.
+    Refused outright when absent outside development, like SESSION_SECRET,
+    and for the same reason raised here rather than in a lifespan handler:
+    `main.py` reads it at import, so the refusal precedes any request. With
+    `MAEC_ENV=development`, None, and keys.py generates an ephemeral key and
+    says so.
 
     A dashboard or a .env file may hold the PEM on one line with literal
     `\\n` sequences; both that and real newlines are accepted.
@@ -298,12 +318,12 @@ def oidc_private_key_pem() -> str | None:
     value = os.environ.get("OIDC_PRIVATE_KEY", "").strip()
     if value:
         return value.replace("\\n", "\n")
-    if on_render():
+    if not is_development():
         raise RuntimeError(
             "OIDC_PRIVATE_KEY is not set. Generate an RSA key of at least 2048 "
-            "bits and paste its PEM into the Render dashboard. Refusing to start "
-            "rather than generate one, because every instance must sign with the "
-            "same key.")
+            "bits (see .env.example) and set its PEM. Refusing to start rather "
+            "than generate one, because every worker must sign with the same "
+            "key. On a developer's machine, set MAEC_ENV=development instead.")
     return None
 
 

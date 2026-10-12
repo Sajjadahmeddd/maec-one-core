@@ -56,8 +56,8 @@ identity_config.core_public_url()
 async def lifespan(_app: FastAPI):
     """Signing in is always required. Say what the service is running on,
     without echoing anything secret, and publish the signing key."""
-    where = "on Render" if identity_config.on_render() else "locally"
-    print(f"MAEC One Core: per-user sign-in against the identity database ({where}).")
+    print("MAEC One Core: per-user sign-in against the identity database "
+          f"({identity_config.environment()}).")
     if not os.environ.get("DATABASE_URL", "").strip():
         print("MAEC One Core: DATABASE_URL is not set — sign-in cannot work until it is.")
     if not identity_config.session_secret_configured():
@@ -214,9 +214,12 @@ async def security_headers(request: Request, call_next):
     response = await call_next(request)
     for header, value in SECURITY_HEADERS.items():
         response.headers.setdefault(header, value)
-    # Only meaningful over TLS, and only true on Render — asserting it in
-    # local development would pin a developer's browser to https://localhost.
-    if os.environ.get("RENDER"):
+    # Only meaningful over TLS, so sent whenever this request arrived over
+    # https — directly, or through a trusted proxy's X-Forwarded-Proto
+    # (TRUSTED_PROXIES). Never decided by platform: it used to key on Render's
+    # RENDER variable, which a VPS never sets. Plain http on a developer's
+    # machine gets none, which keeps https://localhost unpinned.
+    if request.url.scheme == "https":
         response.headers.setdefault(
             "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
         )

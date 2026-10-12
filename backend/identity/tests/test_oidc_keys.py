@@ -36,15 +36,15 @@ def env(monkeypatch):
 
 
 # ------------------------------------------------------ from the environment
-def test_on_render_a_missing_private_key_refuses_to_start(env):
-    env.setenv("RENDER", "true")
+def test_outside_development_a_missing_private_key_refuses_to_start(env):
+    env.delenv("MAEC_ENV", raising=False)
     env.delenv("OIDC_PRIVATE_KEY", raising=False)
     with pytest.raises(RuntimeError, match="OIDC_PRIVATE_KEY is not set"):
         keys.signing_key()
 
 
 def test_locally_a_missing_key_is_generated_and_says_so(env, caplog):
-    env.delenv("RENDER", raising=False)
+    env.setenv("MAEC_ENV", "development")
     env.delenv("OIDC_PRIVATE_KEY", raising=False)
     env.setenv("OIDC_KEY_ID", "belongs-to-a-real-key")
     with caplog.at_level(logging.WARNING, logger="maec.identity"):
@@ -126,7 +126,7 @@ def test_a_retired_key_id_cannot_sign_again(db):
 
 
 def test_a_new_ephemeral_key_retires_the_last_one(db, env):
-    env.delenv("RENDER", raising=False)
+    env.setenv("MAEC_ENV", "development")
     env.delenv("OIDC_PRIVATE_KEY", raising=False)
     first = keys.ensure_published(db).kid
     keys.reset()                                        # a restart, in effect

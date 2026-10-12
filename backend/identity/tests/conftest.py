@@ -20,6 +20,9 @@ import os
 # override=False — so these values win).
 os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
 os.environ["SESSION_SECRET"] = "test-only-session-secret"
+# A developer's machine: the generated fallbacks are allowed. Unset, Core is in
+# production and refuses to start without its secrets (config.is_development).
+os.environ["MAEC_ENV"] = "development"
 
 # Settings a developer's .env sets for running the real thing, and which would
 # otherwise leak into every test: with SESSION_COOKIE_DOMAIN=.maec.local the

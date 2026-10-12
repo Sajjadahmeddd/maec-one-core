@@ -17,7 +17,7 @@ from backend.identity import config, permissions
 
 # ------------------------------------------------------- SESSION_SECRET
 def clear_secret(monkeypatch):
-    for name in ("SESSION_SECRET", "MAEC_SECRET_KEY", "RENDER"):
+    for name in ("SESSION_SECRET", "MAEC_SECRET_KEY"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -44,8 +44,10 @@ def test_locally_a_missing_secret_is_generated(monkeypatch):
     assert config.session_secret_configured() is False
 
 
-def test_on_render_a_missing_secret_refuses_to_start(monkeypatch):
-    """The same fallback on Render is a bug that hides.
+@pytest.mark.parametrize("environment", [None, "production", "staging", "Development!"])
+def test_outside_development_a_missing_secret_refuses_to_start(monkeypatch, environment):
+    """The same fallback outside development is a bug that hides — and it is
+    refused by default: unset, or anything but "development", is production.
 
     One instance: everyone is signed out on every restart. More than one:
     each instance generates a *different* secret, requests round-robin, and
@@ -54,7 +56,10 @@ def test_on_render_a_missing_secret_refuses_to_start(monkeypatch):
     Refusing to boot is strictly better than booting into that.
     """
     clear_secret(monkeypatch)
-    monkeypatch.setenv("RENDER", "true")
+    if environment is None:
+        monkeypatch.delenv("MAEC_ENV", raising=False)
+    else:
+        monkeypatch.setenv("MAEC_ENV", environment)
     with pytest.raises(RuntimeError) as raised:
         config.session_secret()
     assert "SESSION_SECRET" in str(raised.value)
