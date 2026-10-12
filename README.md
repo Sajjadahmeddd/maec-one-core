@@ -120,7 +120,12 @@ networks:
     name: maec_core_net
 ```
 
-The full go-live, step by step, is `deploy/RUNBOOK.md`.
+On the VPS, Core is `auth.mirageaec.com` (127.0.0.1:8001) and the gated
+Engineering Tools is `engtools.mirageaec.com` (127.0.0.1:8082) — both added to
+Caddy beside what is already there. The old Engineering Tools keeps
+`et.mirageaec.com` (8080) until it is retired; Project Management keeps
+`promanage.mirageaec.com` (8081). The full go-live, step by step, is
+`deploy/RUNBOOK.md`.
 
 ```bash
 cp deploy/compose.example.yml deploy/compose.yml
@@ -187,7 +192,7 @@ and signs out the sessions minted under the old password. Then unset it.
 .venv/Scripts/python -m pytest
 ```
 
-524 tests. 502 run against an in-memory SQLite; 21 run against the PostgreSQL
+529 tests. 507 run against an in-memory SQLite; 21 run against the PostgreSQL
 in your `.env` and cover what SQLite cannot — column widths, CHECK
 constraints, the append-only trigger, the migrations run up and down with data
 present, real concurrency on single-use authorization codes, and a session

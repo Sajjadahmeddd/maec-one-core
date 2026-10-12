@@ -1,4 +1,4 @@
-# Go-live runbook — single sign-on at auth.mirageaec.com and et.mirageaec.com
+# Go-live runbook — single sign-on at auth.mirageaec.com and engtools.mirageaec.com
 
 For the person doing the cutover, on the VPS over SSH. Follow it top to bottom.
 Every command has a comment under it saying what it does. Nothing here
@@ -6,16 +6,19 @@ contains a real secret: each one is generated on the server, with the command
 shown. Never paste a generated secret into a chat, a ticket or a commit.
 
 **The shape of it.** Core (sign-in, at `auth.mirageaec.com`) and the new,
-gated Engineering Tools both start *next to* the old Engineering Tools stack,
-which keeps serving `et.mirageaec.com` the whole time. Going live is one line
-in Caddy: point `et.mirageaec.com` at the new stack. Rolling back is the same
-line, back.
+gated Engineering Tools (at its own new address, `engtools.mirageaec.com`)
+start *next to* everything already on the VPS. Going live is **adding two
+blocks** to the Caddyfile; nothing already in it changes. The old Engineering
+Tools keeps serving `et.mirageaec.com` exactly as today, until real users have
+moved and it is retired, as a separate, later step (step 10). Rolling back is
+removing the `engtools.mirageaec.com` block.
 
 ```
-                  ┌─ auth.mirageaec.com ─▶ 127.0.0.1:8001 ─▶ Core           (new)
+                  ┌─ et.mirageaec.com        ─▶ 127.0.0.1:8080 ─▶ old Engineering Tools (project "maec"), unchanged
+                  ├─ promanage.mirageaec.com ─▶ 127.0.0.1:8081 ─▶ Project Management (project "promanage"), unchanged
 Caddy (host:443) ─┤
-                  └─ et.mirageaec.com  ─▶ 127.0.0.1:80   ─▶ old ET stack   (today)
-                                       └▶ 127.0.0.1:8081 ─▶ new ET stack   (after step 7)
+                  ├─ auth.mirageaec.com      ─▶ 127.0.0.1:8001 ─▶ Core                  (new)
+                  └─ engtools.mirageaec.com  ─▶ 127.0.0.1:8082 ─▶ new Engineering Tools (new)
 
 new ET backend ── http://maec-core:8000 ──▶ Core          (Docker network maec_core_net)
 ```
@@ -30,30 +33,37 @@ stop and look at it before doing anything else.
 
 ---
 
-## 1. Before you start — write down the old stack, change nothing
+## 1. Before you start — write down what is running, change nothing
 
 ```bash
+sudo ss -ltnp | grep -E ':(8001|8082)\b' || echo "8001 and 8082 are free"
+# Checks, before anything is started, that nothing listens on 8001 (Core) or
+# 8082 (the new Engineering Tools). "free" is what you want; anything listed —
+# with the process holding it — means stop and find out what it is.
+
+sudo ss -ltnp | grep -E ':(8080|8081)\b'
+# Shows the two ports already in use and by whom: 8080, the old Engineering
+# Tools; 8081, Project Management. Neither is touched by anything below.
+
 cd <OLD_ET_FOLDER> && git log -1 --oneline
-# Records the commit the old Engineering Tools stack is running. Write it down:
-# it is what you are protecting, and what a rollback returns to.
+# Records the commit the old Engineering Tools is running. Write it down.
 
 docker ps --format '{{.Names}}\t{{.Ports}}\t{{.Image}}'
-# Lists running containers. Confirm the old stack's frontend publishes
-# 127.0.0.1:80->80/tcp, and note every container name.
+# Lists running containers. Note the old Engineering Tools' (project "maec",
+# 127.0.0.1:8080) and Project Management's (project "promanage", 127.0.0.1:8081).
 
-docker network ls
-# Lists Docker networks. Note the old stack's network (maec_maec_net).
-
-docker network inspect maec_maec_net --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'
-# Prints its address range. Expect 172.30.57.0/24.
+docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}'
+# Lists every Docker network and its range. Note them: Core uses 10.231.0.0/24
+# and 10.231.1.0/24, the new Engineering Tools 10.231.2.0/24 — none may be in use.
 
 sudo cat /etc/caddy/Caddyfile
-# Shows the current Caddy configuration. Copy the et.mirageaec.com block into
-# your notes exactly as it is — step 7 changes one line of it, step 9 restores it.
+# Shows today's Caddy configuration. Expect the global block with
+# "protocols h1 h2", et.mirageaec.com -> localhost:8080 and
+# promanage.mirageaec.com -> localhost:8081. All of it stays exactly as it is.
 
-sudo cp -n /etc/caddy/Caddyfile /etc/caddy/Caddyfile.before-maec-one
-# Keeps a copy of today's Caddyfile. -n: if that copy already exists from an
-# earlier attempt, it is left alone rather than overwritten.
+sudo cp -n /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak-$(date +%Y%m%d-%H%M%S)
+# Keeps a dated copy of the Caddyfile before you touch it. -n: never overwrites
+# an existing copy. This copy is what you restore if anything goes wrong.
 ```
 
 Then, in the Render dashboard, confirm the service behind
@@ -71,17 +81,24 @@ curl -sI https://engineeringtools.mirageaec.com | head -1
 
 ## 2. DNS
 
-In the DNS provider for mirageaec.com, add an **A record** for
-`auth.mirageaec.com` pointing at the VPS. Leave `et.mirageaec.com` alone — it
-already points at the VPS.
+In the DNS provider for mirageaec.com, add two **A records**, both pointing at
+the VPS:
+
+* `auth.mirageaec.com`
+* `engtools.mirageaec.com`
+
+Leave `et.mirageaec.com` and `promanage.mirageaec.com` alone.
 
 ```bash
 curl -4 -s ifconfig.me; echo
 # Prints the VPS's public IPv4 address: <VPS_IP>.
 
 dig +short auth.mirageaec.com
-# Must print the same address. If it prints nothing, wait for DNS to spread and
-# try again — Caddy cannot get a certificate for auth.mirageaec.com until it does.
+# Must print the same address.
+
+dig +short engtools.mirageaec.com
+# Must print the same address too. If either prints nothing, wait for DNS to
+# spread and try again — Caddy cannot get a certificate for a name until it does.
 ```
 
 ---
@@ -98,8 +115,8 @@ docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM
 ip route | grep -E '^10\.231\.' || echo "10.231.x.x is free"
 # Checks the host's own routes for the same ranges. "free" is what you want.
 
-ss -ltn | grep -E ':8001\b' || echo "port 8001 is free"
-# Checks nothing on the host already listens on 8001, where Core is published.
+sudo ss -ltnp | grep -E ':8001\b' || echo "port 8001 is free"
+# Checks again, right before Core starts, that nothing listens on 8001.
 ```
 
 If anything is in use, stop: the ranges are fixed in
@@ -197,9 +214,11 @@ curl -s http://127.0.0.1:8001/api/health; echo
 # Asks Core directly. Expect "status":"ok" and "database":"ok".
 ```
 
-### 3e. Caddy
+### 3e. Caddy — add Core's block
 
-Add this block to `/etc/caddy/Caddyfile`, beside the others. Change nothing else.
+Add this block at the end of `/etc/caddy/Caddyfile`. Change nothing else —
+not the global `{ servers { protocols h1 h2 } }` block, not
+`et.mirageaec.com`, not `promanage.mirageaec.com`.
 
 ```
 auth.mirageaec.com {
@@ -208,16 +227,28 @@ auth.mirageaec.com {
 ```
 
 ```bash
+sudo cp -n /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak-$(date +%Y%m%d-%H%M%S)
+# Keeps a dated copy of the Caddyfile before you touch it. -n: never overwrites
+# an existing copy. This copy is what you restore if anything goes wrong.
+
 sudo nano /etc/caddy/Caddyfile
-# Opens the Caddyfile. Add the block above; leave every other block exactly as it is.
+# Opens the Caddyfile. Add the block above at the end; touch nothing else.
 
 sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-# Checks the file before Caddy uses it. "Valid configuration" is what you want.
+# Checks the edited file before Caddy uses it. "Valid configuration" is what
+# you want; anything else, fix it now — nothing has changed for anyone yet.
 
 sudo systemctl reload caddy
-# Makes Caddy read the file again, without dropping anyone's connection. Caddy
-# fetches a certificate for auth.mirageaec.com the first time it is asked.
+# Makes the running Caddy load the new file in place: et.mirageaec.com and
+# promanage.mirageaec.com keep serving throughout, and if the new file were
+# rejected, Caddy would carry on with the old one.
+
+sudo systemctl status caddy --no-pager | head -5
+# Confirms Caddy is still "active (running)" after the reload.
 ```
+
+Caddy fetches a certificate for `auth.mirageaec.com` the first time it is
+asked — which is step 4.
 
 ---
 
@@ -258,17 +289,17 @@ cd /opt/maec-one-core && nano deploy/env.production
 ### 5b. Engineering Tools' address
 
 ```bash
-docker compose -f deploy/compose.yml --env-file deploy/env.production exec core-db psql -U maec_core -d maec_identity -c "UPDATE applications SET base_url = 'https://et.mirageaec.com' WHERE key = 'engineering';"
+docker compose -f deploy/compose.yml --env-file deploy/env.production exec core-db psql -U maec_core -d maec_identity -c "UPDATE applications SET base_url = 'https://engtools.mirageaec.com' WHERE key = 'engineering';"
 # Tells Core where Engineering Tools lives. Its launcher tile opens it, and after
 # sign-in people are sent back only to this exact address. Expect "UPDATE 1".
 ```
 
 ### 5c. Everyone who uses Engineering Tools today
 
-The old app had **one shared password**. After the switch, only people with
-their own account *and* an Engineering Tools seat can get in. Make the list
-first — everyone who uses it today — and for each person, in **Users &
-Access**:
+The old app has **one shared password**. The new one, at
+`engtools.mirageaec.com`, lets in only people with their own account *and* an
+Engineering Tools seat. Make the list first — everyone who uses Engineering
+Tools today — and for each person, in **Users & Access**:
 
 1. **Add user**: name, email, department, and an **initial password**. Core
    marks it "must change password": they choose their own at first sign-in.
@@ -283,8 +314,10 @@ write the plan down:
   that tells them their address — in person, or by phone; never in the same
   email or chat message;
 * it is single-use in effect: Core refuses everything until they replace it;
-* tell them the day and time of the switch, and that the old shared password
-  stops working then.
+* tell them the new address, `https://engtools.mirageaec.com`, from the day of
+  step 7. The old `et.mirageaec.com`, with its shared password, keeps working
+  until it is retired in step 10 — tell them that date when you set it, not
+  before.
 
 ---
 
@@ -317,18 +350,19 @@ cd /opt/<NEW_REPO> && git log -1 --oneline
 # Must show the commit you wrote down in 6a.
 ```
 
-### 6c. Check it cannot touch the old stack
+### 6c. Check it cannot touch what is already running
 
-The old stack is the Compose project `maec`, on port 80, network
-`maec_maec_net` (172.30.57.0/24). The new one must differ in all of them, or
-starting it would replace or collide with the old one.
+The old Engineering Tools is the Compose project `maec`, on 127.0.0.1:8080,
+network `maec_maec_net`; Project Management is `promanage`, on 127.0.0.1:8081.
+The new stack must differ from both, or starting it would replace or collide
+with one of them.
 
 ```bash
-grep -nE '^name:|127\.0\.0\.1:[0-9]+:|subnet:|maec_core_net|image:' docker-compose.yml
+grep -nE '^name:|127\.0\.0\.1:|ET_PORT|subnet|maec_core_net|image:' docker-compose.yml
 # Shows the new stack's project name, published port, range, Core network and
-# image names. You need: a name that is NOT "maec"; 127.0.0.1:8081 (not 80);
-# a subnet that is NOT 172.30.57.0/24; maec_core_net joined as external; and
-# image names different from the old stack's. If any is wrong, stop.
+# image names. You need: name "maec-et" (NOT "maec"); the port written as
+# ${ET_PORT...}; its own subnet (10.231.2.0/24); maec_core_net joined as
+# external; images named maec-et-…. If any is different, stop.
 ```
 
 ### 6d. Its settings
@@ -343,6 +377,7 @@ cp -n .env.maec.example .env.maec && chmod 600 .env.maec
 
 nano .env.maec
 # Set, at least:
+#   ET_PORT=8082                                  (the port Caddy will use)
 #   CORE_URL=http://maec-core:8000                (Core, over maec_core_net)
 #   CORE_PUBLIC_URL=https://auth.mirageaec.com
 #   MAEC_APP_KEY=engineering
@@ -351,31 +386,48 @@ nano .env.maec
 # start on a placeholder or a short secret.
 ```
 
+**Every `docker compose` command for this stack carries `--env-file .env.maec`.**
+`ET_PORT` is read when Compose *reads the compose file*, and Compose takes such
+values from `--env-file` (or a file named `.env`), not from the `env_file:`
+the containers get. Without the flag the port falls back to the compose file's
+default, 8081 — Project Management's port; Docker would refuse to start rather
+than take it, but don't find out that way.
+
+```bash
+docker compose --env-file .env.maec config | grep -E 'published|host_ip'
+# Prints the ports Compose WOULD publish, without starting anything. You need
+# published "8082" on host_ip 127.0.0.1 — not 8081, not 80, not 8080.
+```
+
 ### 6e. Start it
 
 ```bash
-docker compose up -d --build
-# Builds and starts the new stack on 127.0.0.1:8081, joined to maec_core_net
+sudo ss -ltnp | grep -E ':8082\b' || echo "port 8082 is free"
+# Checks again, right before it starts, that nothing has taken 8082.
+
+docker compose --env-file .env.maec up -d --build
+# Builds and starts the new stack on 127.0.0.1:8082, joined to maec_core_net
 # (created in 3d). Core must already be running for the gate to answer.
 
-docker compose ps
+docker compose --env-file .env.maec ps
 # Wait until every container reads "(healthy)" or "Up".
 
-docker ps --format '{{.Names}}\t{{.Ports}}' | grep -E ':80->|:8081->'
-# Shows BOTH stacks running: the old one on 127.0.0.1:80, the new one on 127.0.0.1:8081.
+docker ps --format '{{.Names}}\t{{.Ports}}' | grep -E ':(8001|8080|8081|8082)->'
+# Shows all four side by side: Core on 8001, the old Engineering Tools on 8080,
+# Project Management on 8081, the new Engineering Tools on 8082.
 ```
 
 ### 6f. Check it from the VPS shell, before anyone can reach it
 
 This sends a request to the new stack exactly as Caddy will once
-`et.mirageaec.com` points at it — the host it was asked for, https, and a
+`engtools.mirageaec.com` points at it — the host it was asked for, https, and a
 visitor's address:
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' \
-  -H 'Host: et.mirageaec.com' -H 'X-Forwarded-Host: et.mirageaec.com' \
+  -H 'Host: engtools.mirageaec.com' -H 'X-Forwarded-Host: engtools.mirageaec.com' \
   -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-For: 203.0.113.10' \
-  'http://127.0.0.1:8081/some/page?x=1'
+  'http://127.0.0.1:8082/some/page?x=1'
 # Asks the new Engineering Tools for a page with no session. It must answer
 # with a redirect to Core's sign-in, carrying the exact page to come back to.
 ```
@@ -383,56 +435,88 @@ curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' \
 The line printed must be exactly:
 
 ```
-302 https://auth.mirageaec.com/?next=https%3A%2F%2Fet.mirageaec.com%2Fsome%2Fpage%3Fx%3D1
+302 https://auth.mirageaec.com/?next=https%3A%2F%2Fengtools.mirageaec.com%2Fsome%2Fpage%3Fx%3D1
 ```
 
 * `503` and "MAEC One is unavailable": the new stack cannot reach Core —
   check it joined `maec_core_net` and that `CORE_URL` is `http://maec-core:8000`.
 * `next=http%3A…` (plain http) or another host in `next`: the new stack is
-  not reading the forwarded address correctly. Do not switch.
-* The old stack answers? Check `docker ps`: 8081 must be the new one.
+  not reading the forwarded address correctly. Do not go live.
+* No answer at all: check `docker ps` shows the new stack on 8082.
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:80/
-# Confirms the old stack still answers on port 80, untouched.
+curl -s -o /dev/null -w 'old ET %{http_code}\n' http://127.0.0.1:8080/
+# Confirms the old Engineering Tools still answers on 8080, untouched.
+
+curl -s -o /dev/null -w 'ProManage %{http_code}\n' http://127.0.0.1:8081/
+# Confirms Project Management still answers on 8081, untouched.
 ```
 
 ---
 
-## 7. Switch
+## 7. Go live — add the engtools.mirageaec.com block
 
-Change **one line** of the `et.mirageaec.com` block — the port.
-
-Before (today, the block you noted in step 1):
+Add one more block at the end of `/etc/caddy/Caddyfile`. Nothing that is
+already in the file changes — `et.mirageaec.com` keeps pointing at the old
+Engineering Tools on 8080.
 
 ```
-et.mirageaec.com {
-    reverse_proxy localhost:80
+engtools.mirageaec.com {
+    reverse_proxy localhost:8082
 }
 ```
-
-After:
-
-```
-et.mirageaec.com {
-    reverse_proxy localhost:8081
-}
-```
-
-If the block you noted has more lines than this, keep them all and change only
-`localhost:80` → `localhost:8081`.
 
 ```bash
+sudo cp -n /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak-$(date +%Y%m%d-%H%M%S)
+# Keeps a dated copy of the Caddyfile before you touch it. -n: never overwrites
+# an existing copy. This copy is what you restore if anything goes wrong.
+
 sudo nano /etc/caddy/Caddyfile
-# Opens the Caddyfile. Change localhost:80 to localhost:8081 in the
-# et.mirageaec.com block, and nothing else.
+# Opens the Caddyfile. Add the block above at the end; touch nothing else.
 
 sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-# Checks the change before it is used. "Valid configuration" is what you want.
+# Checks the edited file before Caddy uses it. "Valid configuration" is what
+# you want; anything else, fix it now — nothing has changed for anyone yet.
 
 sudo systemctl reload caddy
-# Switches et.mirageaec.com to the new stack, without dropping connections.
+# Makes the running Caddy load the new file in place: et.mirageaec.com and
+# promanage.mirageaec.com keep serving throughout, and if the new file were
+# rejected, Caddy would carry on with the old one.
+
+sudo systemctl status caddy --no-pager | head -5
+# Confirms Caddy is still "active (running)" after the reload.
 ```
+
+The whole Caddyfile afterwards — the first three blocks exactly as they were
+this morning, two added:
+
+```
+{
+    servers {
+        protocols h1 h2
+    }
+}
+
+et.mirageaec.com {
+    reverse_proxy localhost:8080
+}
+
+promanage.mirageaec.com {
+    reverse_proxy localhost:8081
+}
+
+auth.mirageaec.com {
+    reverse_proxy localhost:8001
+}
+
+engtools.mirageaec.com {
+    reverse_proxy localhost:8082
+}
+```
+
+(If today's file writes them on one line each — `et.mirageaec.com {
+reverse_proxy localhost:8080 }` — leave them as they are. Only the two new
+blocks are yours.)
 
 ---
 
@@ -441,7 +525,7 @@ sudo systemctl reload caddy
 In a **fresh incognito / private window**, so no old cookie interferes. Sign
 in as an ordinary person with an Engineering Tools seat — not the admin.
 
-1. **Sign in, land back.** Open `https://et.mirageaec.com`: you're sent to the
+1. **Sign in, land back.** Open `https://engtools.mirageaec.com`: you're sent to the
    MAEC One login. Sign in, and you land back in Engineering Tools.
 2. **The tool works.** A HAP PDF converts to CSV.
 3. **Already signed in at MAEC One.** Open `https://auth.mirageaec.com` in a
@@ -455,7 +539,7 @@ in as an ordinary person with an Engineering Tools seat — not the admin.
 All five pass: you are live. Any one fails: step 9, now.
 
 Optional sixth, once the five pass: sign in again at `https://auth.mirageaec.com`
-and click the **Engineering Tools** tile — it opens `https://et.mirageaec.com`
+and click the **Engineering Tools** tile — it opens `https://engtools.mirageaec.com`
 and lets you straight in.
 
 ---
@@ -463,34 +547,61 @@ and lets you straight in.
 ## 9. Rollback — if any check in step 8 fails
 
 ```bash
+sudo cp -n /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak-$(date +%Y%m%d-%H%M%S)
+# Keeps a dated copy of the Caddyfile before you touch it. -n: never overwrites
+# an existing copy. This copy is what you restore if anything goes wrong.
+
 sudo nano /etc/caddy/Caddyfile
-# In the et.mirageaec.com block, change localhost:8081 back to localhost:80.
-# Nothing else.
+# Delete the engtools.mirageaec.com block you added in step 7. Nothing else.
 
 sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-# Checks the file. "Valid configuration" is what you want.
+# Checks the edited file before Caddy uses it. "Valid configuration" is what
+# you want; anything else, fix it now — nothing has changed for anyone yet.
 
 sudo systemctl reload caddy
-# Points et.mirageaec.com at the old stack again. It is serving within seconds.
+# Makes the running Caddy load the new file in place: et.mirageaec.com and
+# promanage.mirageaec.com keep serving throughout, and if the new file were
+# rejected, Caddy would carry on with the old one.
+
+sudo systemctl status caddy --no-pager | head -5
+# Confirms Caddy is still "active (running)" after the reload.
 ```
 
-Leave Core and the new stack running: you will want them to find out what
-went wrong. Nothing about the old stack changed at any point, so nothing about
-it needs restoring.
+`engtools.mirageaec.com` stops answering; nobody was using it yet. Everyone
+carries on at `et.mirageaec.com`, which never changed. Leave Core and the new
+stack running, so you can find out what went wrong; put the block back when
+it is fixed.
 
 ---
 
-## 10. Later — after a week of real use has gone well
+## 10. Later — retire et.mirageaec.com, once real users have moved
 
-```bash
-cd <OLD_ET_FOLDER> && docker compose down
-# Stops the old Engineering Tools stack and removes its containers. Its
-# folder, code and images stay, in case you need to look back.
-```
+A separate step, on its own day — not part of going live. Do it only when
+everyone is using `engtools.mirageaec.com` with their own account, and a week
+of real use has gone well.
 
-Keep `<OLD_ET_FOLDER>` for a while longer before deleting it. Then remove the
-`engineeringtools.mirageaec.com` record from DNS, and delete the suspended
-Render service.
+1. Tell everyone the old address is going, and when.
+2. Point the old address at the new one, so bookmarks keep working. Back up,
+   edit, validate, reload exactly as in step 7, changing only the
+   `et.mirageaec.com` block, to:
+
+   ```
+   et.mirageaec.com {
+       redir https://engtools.mirageaec.com{uri} permanent
+   }
+   ```
+
+3. Stop the old stack, keeping its folder for a while:
+
+   ```bash
+   cd <OLD_ET_FOLDER> && docker compose down
+   # Stops the old Engineering Tools and removes its containers, so 8080 is
+   # free again. Its folder, code and images stay, in case you need to look back.
+   ```
+
+4. Later still: delete `<OLD_ET_FOLDER>`; remove the
+   `engineeringtools.mirageaec.com` DNS record and delete the suspended Render
+   service.
 
 ---
 
@@ -540,7 +651,10 @@ For an app that will live at `<app>.mirageaec.com`:
    `http://maec-core:8000`.
 5. **Add the gate middleware** — every request checked with Core, as
    Engineering Tools does (`backend/maec_auth/` in its repository).
-6. **Add a Caddy block** — `<app>.mirageaec.com { reverse_proxy
-   localhost:<its port> }`, published on `127.0.0.1` only. Validate, reload.
+6. **Pick its port and add a Caddy block.** Check the port is free first
+   (`sudo ss -ltnp | grep -E ':<port>\b' || echo free`) — 8001, 8080, 8081
+   and 8082 are taken. Publish on `127.0.0.1` only, then add
+   `<app>.mirageaec.com { reverse_proxy localhost:<port> }`: back up,
+   validate, reload, as in step 7.
 
 Then give people seats on it in **Users & Access**.

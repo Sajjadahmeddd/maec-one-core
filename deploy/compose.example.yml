@@ -8,8 +8,10 @@
 #
 # It sits beside what is already there and changes none of it:
 #
-#   Caddy (host, :443) ── auth.mirageaec.com ─▶ 127.0.0.1:8001 ─▶ core :8000
-#                      └─ et.mirageaec.com ───▶ 127.0.0.1:8081 ─▶ Engineering Tools
+#   Caddy (host, :443) ── auth.mirageaec.com ──────▶ 127.0.0.1:8001 ─▶ core :8000
+#                      ├─ engtools.mirageaec.com ──▶ 127.0.0.1:8082 ─▶ new Engineering Tools
+#                      ├─ et.mirageaec.com ────────▶ 127.0.0.1:8080 ─▶ old Engineering Tools (untouched)
+#                      └─ promanage.mirageaec.com ─▶ 127.0.0.1:8081 ─▶ Project Management (untouched)
 #   an app's backend ── http://maec-core:8000/api/gate/check ─▶ core  (maec_core_net)
 #
 # Core starts first and depends on no app. maec_core_net, the network Core

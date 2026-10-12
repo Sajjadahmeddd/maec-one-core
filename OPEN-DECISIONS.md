@@ -883,6 +883,22 @@ and more handshake fixes — in every app, in every language.
   assets out of the check is the obvious first saving, and is run 2's to
   decide.
 
+**The cookie's name — `maec_one_session`.** Not `maec_session`: that is the
+old Engineering Tools' own cookie, host-only on `et.mirageaec.com`. Under the
+same name, with Domain=.mirageaec.com, that host would be sent two cookies
+called `maec_session`, and the old app could read Core's as its own. (Renamed
+after the VPS was inspected, Prompt 12.)
+
+**The addresses (from the VPS, Prompt 12).** Core is `auth.mirageaec.com`
+(Caddy → 127.0.0.1:8001); the gated Engineering Tools is
+`engtools.mirageaec.com` (→ 127.0.0.1:8082). Both are *added* to Caddy, beside
+the old Engineering Tools on `et.mirageaec.com` (→ 8080) and Project
+Management on `promanage.mirageaec.com` (→ 8081), which do not change. There
+is no switch of `et.mirageaec.com`: it stays on the old app until real users
+have moved, and is retired as a separate, later step (`deploy/RUNBOOK.md`,
+step 10). The retired Render address, `engineeringtools.mirageaec.com`, is
+not used.
+
 **The cookie domain — decided: `.mirageaec.com`,** so no address changes.
 
 * *Accepted cost:* the company website (Hostinger) and any other
