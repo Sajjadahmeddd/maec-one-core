@@ -265,8 +265,9 @@ def security_controls(db: Session = Depends(get_db),
              "label": f"Sign-in rate limited ({router_auth.LOGIN_RATE} per address)",
              "on": bool(router_auth.limiter.enabled), "where": "identity/router_auth.py"},
             {"key": "lockout",
-             "label": f"Account locks after {router_auth.LOCK_AFTER} failures, "
-                      "for escalating periods",
+             "label": f"Account locks after {router_auth.LOCK_AFTER} failures "
+                      "from one address, for that address, for escalating periods",
+
              "on": True, "where": "identity/router_auth.py"},
             {"key": "csrf",
              "label": "Every change made with a session requires a CSRF token",

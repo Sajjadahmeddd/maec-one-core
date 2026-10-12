@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import config  # noqa: F401  (loads .env)
-from . import security, sessions
+from . import lockout, security, sessions
 from .db import session_factory
 from .models import (
     Application, Organization, Permission, Role, RolePermission, Subscription,
@@ -210,9 +210,7 @@ def _user(db, org, email, password, display_name, made, *, reset: bool) -> User:
             # as any password change does: sessions minted under the old one end
             sessions.revoke_all(db, user.id)
             made("password resets")
-        if user.failed_login_count or user.locked_until is not None:
-            user.failed_login_count = 0
-            user.locked_until = None
+        if lockout.clear(db, user.id):
             made("lockouts cleared")
         db.flush()
     return user

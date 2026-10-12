@@ -501,6 +501,43 @@ def test_a_session_revoked_on_one_connection_is_refused_on_another_at_once(pg):
     assert after and set(after) == {401}, after
 
 
+# --------------------------------------------- the lockout table (Prompt 11)
+def _lock_row(session, address, *, failed=0, strikes=0):
+    from datetime import datetime, timezone
+
+    from backend.identity.models import LoginLock
+    return LoginLock(user_id=user(session, "admin@mirageaec.com").id, address=address,
+                     failed_count=failed, strikes=strikes,
+                     updated_at=datetime.now(timezone.utc))
+
+
+def test_a_login_lock_is_checked_by_the_database(session):
+    from sqlalchemy.exc import IntegrityError
+
+    for row, constraint in ((_lock_row(session, "198.51.100.1", failed=-1),
+                             "ck_login_locks_failed_count"),
+                            (_lock_row(session, "198.51.100.2", strikes=-1),
+                             "ck_login_locks_strikes")):
+        session.add(row)
+        with pytest.raises(Exception, match=constraint):
+            session.commit()
+        session.rollback()
+
+    session.add(_lock_row(session, "198.51.100.3"))
+    session.add(_lock_row(session, "198.51.100.3"))
+    with pytest.raises(IntegrityError, match="uq_login_locks_user_address"):
+        session.commit()
+    session.rollback()
+
+
+def test_the_account_wide_lock_columns_are_gone(session):
+    """One count per account is what let anyone lock anyone out; a column
+    left behind would be a second, stale answer."""
+    columns = set(session.scalars(text(
+        "select column_name from information_schema.columns where table_name = 'users'")))
+    assert not {"failed_login_count", "locked_until"} & columns
+
+
 def test_the_oidc_migration_round_trips_with_rows_present(pg):
     """Up, down and up again, with rows in the new tables and the old ones —
     so the downgrade is known to work on a database that has been used, not
@@ -514,7 +551,8 @@ def test_the_oidc_migration_round_trips_with_rows_present(pg):
     from backend.identity import keys
 
     # the OIDC tables, and every table a later revision added on top of them
-    oidc_tables = {"signing_keys", "oauth_clients", "authorization_codes", "sessions"}
+    oidc_tables = {"signing_keys", "oauth_clients", "authorization_codes", "sessions",
+                   "login_locks"}
     cfg = Config(str(REPO / "backend" / "identity" / "alembic.ini"))
 
     with pg.session_factory()() as session:
@@ -524,6 +562,7 @@ def test_the_oidc_migration_round_trips_with_rows_present(pg):
         session.add(_session_row(session, created=moment,
                                  absolute=moment + timedelta(hours=10),
                                  idle=moment + timedelta(hours=2)))
+        session.add(_lock_row(session, "203.0.113.200"))     # and in login_locks
         session.commit()
         users_before = session.scalar(text("select count(*) from users"))
     assert users_before > 0

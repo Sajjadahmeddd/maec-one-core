@@ -80,8 +80,8 @@ class User(Base):
     # rules. Sessions carry the value they were issued with; a mismatch is
     # how a change takes effect in seconds rather than at cookie expiry.
     permissions_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    failed_login_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Failed sign-ins and locks live in login_locks, per client address — not
+    # here, where one count per account let anyone lock anyone out.
     # Set when an administrator creates the account or resets the password.
     # Cleared once the person chooses their own, so an admin-known password is
     # never the one guarding the account long-term.
@@ -93,6 +93,7 @@ class User(Base):
     org: Mapped[Organization] = relationship()
     sessions: Mapped[list["LoginSession"]] = relationship(
         back_populates="user", cascade="all, delete-orphan")
+    login_locks: Mapped[list["LoginLock"]] = relationship(cascade="all, delete-orphan")
     roles: Mapped[list["UserRole"]] = relationship(
         back_populates="user", foreign_keys="UserRole.user_id", cascade="all, delete-orphan")
     licenses: Mapped[list["UserLicense"]] = relationship(
@@ -137,6 +138,34 @@ class LoginSession(Base):
     user_agent: Mapped[str | None] = mapped_column(String(400))
 
     user: Mapped[User] = relationship(back_populates="sessions")
+
+
+class LoginLock(Base):
+    """Failed sign-ins against one account from one client address, and the
+    lock they caused. OPEN-DECISIONS #20; the rules are in lockout.py.
+
+    Per address, so failures from one place lock the account for that place
+    only. `strikes` counts the locks this address has caused, and doubles the
+    next one; `failed_count` starts again from zero when a lock expires.
+    """
+    __tablename__ = "login_locks"
+    __table_args__ = (
+        UniqueConstraint("user_id", "address", name="uq_login_locks_user_address"),
+        CheckConstraint("failed_count >= 0", name="ck_login_locks_failed_count"),
+        CheckConstraint("strikes >= 0", name="ck_login_locks_strikes"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    # security.client_ip(): the visitor, through a trusted proxy. "unknown" when
+    # a request has none, so it is still counted.
+    address: Mapped[str] = mapped_column(String(64), nullable=False)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    strikes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=now)
 
 
 # ------------------------------------------------------------ the products

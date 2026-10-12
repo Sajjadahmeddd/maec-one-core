@@ -11,15 +11,13 @@ nothing about the account list leaks through the login form.
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import accounts, security, sessions
+from . import accounts, lockout, security, sessions
 from .db import get_db
 from .models import (
     Application, Organization, Subscription, User, UserLicense,
@@ -37,29 +35,19 @@ def _client_key(request: Request) -> str:
     return security.client_ip(request) or "unknown"
 
 
-# Per-IP. The per-account limit is the lockout below; the two together stop
-# both a wide guess across many accounts and a deep guess at one.
+# Per-IP. The per-account limit is the lockout (lockout.py); the two together
+# stop both a wide guess across many accounts and a deep guess at one.
 limiter = Limiter(key_func=_client_key)
 LOGIN_RATE = "10/minute"
 
 GENERIC_FAILURE = "Incorrect email address or password."
 
-# Escalating lockout. After this many failures the account locks for a
-# minute, doubling with each further failure, up to the cap.
-#
-# A fixed window: a failure while the account is already locked is counted
-# and audited, but never moves the end of the lock. Before, each such attempt
-# re-armed the lock, so one guess every half hour held an account shut for
-# as long as anyone liked. What a fixed window does not stop — a single
-# failure just after it ends locks again — is OPEN-DECISIONS #20.
-LOCK_AFTER = 5
-LOCK_BASE = timedelta(minutes=1)
-LOCK_CAP = timedelta(minutes=30)
-
-
-def _lock_for(failures: int) -> timedelta:
-    steps = max(0, failures - LOCK_AFTER)
-    return min(LOCK_BASE * (2 ** steps), LOCK_CAP)
+# The lockout: per account and client address, a fixed window, and a count
+# that starts again when a lock expires. lockout.py has the rules; the numbers
+# are importable from here, where the audit screen's card reads them.
+LOCK_AFTER = lockout.LOCK_AFTER
+LOCK_BASE = lockout.LOCK_BASE
+LOCK_CAP = lockout.LOCK_CAP
 
 
 def _find_user(db: Session, email: str) -> User | None:
@@ -177,26 +165,27 @@ def login(request: Request, payload: dict, db: Session = Depends(get_db)):
     # every failure path must cost the same as a wrong password.
     hash_ok = security.verify_password(password, user.password_hash if user else None)
 
-    locked = (user is not None and user.locked_until is not None
-              and _as_utc(user.locked_until) > moment)
+    # Locked for *this* address only: someone guessing elsewhere does not lock
+    # the owner out. An expired lock is reset here, its count back to zero.
+    address = security.client_ip(request)
+    locked = user is not None and lockout.locked(db, user, address, at=moment)
     usable = user is not None and user.status == "active" and not locked
 
     if not (usable and hash_ok):
         if user is not None:
-            user.failed_login_count = (user.failed_login_count or 0) + 1
-            newly_locked = False
-            if user.failed_login_count >= LOCK_AFTER and not locked:
-                user.locked_until = moment + _lock_for(user.failed_login_count)
-                newly_locked = True
+            row = lockout.record_failure(db, user, address, at=moment)
+            newly_locked = (not locked and row.locked_until is not None
+                            and _as_utc(row.locked_until) > moment)
             audit(db, actor=user, action="login.failed", target_type="user",
                   target_id=user.id, source="login", result="warning", request=request,
-                  after={"failed_login_count": user.failed_login_count,
+                  after={"failed_attempts": row.failed_count,
                          "locked": locked or newly_locked}, commit=False)
             if newly_locked:
                 audit(db, actor=user, action="login.locked", target_type="user",
                       target_id=user.id, source="login", result="blocked",
                       request=request,
-                      after={"locked_until": user.locked_until.isoformat()}, commit=False)
+                      after={"locked_until": row.locked_until.isoformat(),
+                             "lock_number": row.strikes}, commit=False)
             db.commit()
         else:
             audit(db, actor_email=email or None, action="login.failed",
@@ -204,9 +193,9 @@ def login(request: Request, payload: dict, db: Session = Depends(get_db)):
                   result="warning", request=request)
         raise HTTPException(status_code=401, detail=GENERIC_FAILURE)
 
-    # success
-    user.failed_login_count = 0
-    user.locked_until = None
+    # success: this address's failures and strikes are forgotten; a lock
+    # another address earned stays where it is
+    lockout.clear(db, user.id, address)
     user.last_login_at = moment
     if security.needs_rehash(user.password_hash):
         user.password_hash = security.hash_password(password)

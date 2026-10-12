@@ -23,7 +23,7 @@ from fastapi import Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import security, sessions
+from . import lockout, security, sessions
 from .models import (
     Application, Role, RolePermission, Subscription, User, UserLicense, UserRole,
 )
@@ -300,8 +300,8 @@ def set_password(db: Session, *, actor: User, target: User, password: str,
     security.check_password_policy(password, email=target.email)
     target.password_hash = security.hash_password(password)
     target.must_change_password = by_admin
-    target.failed_login_count = 0
-    target.locked_until = None
+    # a new password clears every lock on the account, from every address
+    lockout.clear(db, target.id)
     db.flush()
     revoked = sessions.revoke_all(db, target.id)
     audit(db, actor=actor,

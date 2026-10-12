@@ -935,7 +935,7 @@ routes they guard; this entry is why they are what they are.
 | Limit | Value | Keyed on | Where |
 |---|---|---|---|
 | Sign-in | 10 a minute | client address (#6) | `router_auth.LOGIN_RATE` |
-| Account lockout | 5 failures, then 1 min doubling to 30 min, fixed window | the account | `router_auth.LOCK_*` |
+| Account lockout | 5 failures, then 1 min, doubling per lock to 30 min; fixed window; count resets when a lock expires | the account **and** client address | `lockout.LOCK_*` |
 | Token endpoint, per address | 120 a minute | client address (#6) | `router_oidc.TOKEN_RATE_PER_IP` |
 | Token endpoint, per client | 240 a minute | the *proven* client | `router_oidc.TOKEN_RATE_PER_CLIENT` |
 | Gate, failed calls | 30 a minute | client address — wrong or missing secret only | `router_gate.GATE_FAILURES_PER_ADDRESS` |
@@ -978,34 +978,52 @@ hundred permanent rows, with nothing to stop a script. Two separate limits now:
   counting them would let anyone throttle an app for everybody. A call with
   the right secret is never limited, so a successful check never is.
 
-**The lockout is a fixed window (E5).** Five failures lock an account for a
-minute, doubling with each further failure up to thirty. A failure while the
-account is already locked is counted and audited, but never moves the end of
-the lock. Before, each such attempt re-armed it.
+**The lockout — decided in Prompt 11: per account and client address, and a
+count that starts again.** It replaced an account-wide lock whose history is
+worth keeping, because the obvious fix (E5) did not fix it.
 
-**What a fixed window does not stop — read this before calling it fixed.**
-The failure count only resets on a successful sign-in. So once an account has
-five failures, the first failure after a window ends starts the next lock,
-at the escalated length — thirty minutes from the tenth failure on. Anyone
-who knows an address can still keep that account shut, at the cost of about
-two requests an hour, from any address. The fixed window removes the
-extension *inside* a lock; it does not remove the denial of service, which is
-what any lock on the account alone allows.
+*What E5 left open.* E5 made the window fixed: a failure during a lock no
+longer extended it. But the failure count reset only on a successful sign-in,
+so once an account had five failures, the first failure after any lock ended
+started the next one — thirty minutes from the tenth failure on. About two
+requests an hour, from anywhere, held anyone out.
 
-**To close it, a choice for a person, not a patch:**
+*What it is now* (`lockout.py`, table `login_locks`, one row per account and
+address):
 
-* *Lock the pair, not the account:* count failures per (account, client
-  address). An attacker locks themselves out; the owner, signing in from
-  their own address, is unaffected. Costs a table (or a keyed counter) and
-  weakens the defence against a distributed guess at one account, which the
-  per-account count is there for.
-* *Let the right password through a lock from a known browser:* a device the
-  person has signed in from before (a long-lived, signed "known device"
-  marker) may still sign in during a lock. The standard shape; more to build.
-* *Leave it:* the per-address rate limit (10 a minute) and argon2 already
-  make guessing slow, and an administrator can clear a lock. Acceptable while
-  the user base is one company.
+* **Per account and address.** Five failures from one address lock that
+  account *for that address*. Someone guessing at a colleague's account
+  locks themselves out; the colleague, signing in from their own address, is
+  unaffected. The address is `security.client_ip()` — the visitor behind a
+  trusted proxy (#6), never a header they wrote.
+* **A lock that expires starts the count again from zero.** One failure after
+  a lock ends is one failure, not a new lock.
+* **Fixed window.** Failures during a lock are counted and audited, never
+  extend it.
+* **Escalation by locks, not failures.** `strikes` counts the locks this
+  address has caused on this account; each is twice the last — 1, 2, 4, 8,
+  16, then 30 minutes. A determined guesser from one address still slows to
+  five tries per half hour.
+* **Unlocking.** A successful sign-in forgets that address's failures and
+  strikes, and only that address's. An administrator's password reset clears
+  every address (`accounts.set_password`), and so does the seed's recovery
+  switch (E6). Rows with no lock that have been quiet for a day are swept when
+  a failure is recorded.
+* The per-address rate limits are unchanged: 10 sign-ins a minute.
 
-Recommended when it matters: the second. Until then, an administrator's
-password reset clears a lock (`accounts.set_password`), and so does the seed's
-recovery switch (E6).
+*The costs, accepted:*
+
+* **A distributed guess at one account** — many addresses, five tries each —
+  is no longer slowed by a per-account count. Argon2 and the per-address limit
+  remain; that trade is what makes the denial of service go away.
+* **One address for many people** — an office behind one NAT address — shares
+  a lock: a colleague in the same office *can* still lock someone out, for
+  that office's address. Narrower than "anyone, from anywhere", not nothing.
+* `users.failed_login_count` and `users.locked_until` are dropped (migration
+  58d9a22f38be): a second, stale answer to "is this account locked?" is worse
+  than none. Locks in force at upgrade are released.
+
+*Considered and not built:* letting the right password through a lock from a
+browser that has signed in before (a "known device" marker). Stronger against
+the office case; more to build, and not needed while the user base is one
+company.

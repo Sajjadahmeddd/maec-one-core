@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from backend.identity import seed
-from backend.identity.models import LoginSession, User
+from backend.identity.models import LoginLock, LoginSession, User
 from backend.identity.resolution import now
 
 from conftest import ADMIN_EMAIL, ADMIN_PASSWORD
@@ -25,11 +25,22 @@ def _admin(db) -> User:
     return db.scalar(select(User).where(User.email == ADMIN_EMAIL))
 
 
+# The test client's own address, so a lock there really stops _sign_in().
+HERE = "testclient"
+
+
 def _lock(db):
+    """Locked from two addresses, one of them the test client's."""
     admin = _admin(db)
-    admin.failed_login_count = 9
-    admin.locked_until = now() + timedelta(minutes=30)
+    for address in (HERE, "203.0.113.66"):
+        db.add(LoginLock(user_id=admin.id, address=address, failed_count=9, strikes=3,
+                         locked_until=now() + timedelta(minutes=30), updated_at=now()))
     db.commit()
+
+
+def _locks(db) -> int:
+    db.expire_all()
+    return len(db.scalars(select(LoginLock).where(LoginLock.user_id == _admin(db).id)).all())
 
 
 def _sign_in(password):
@@ -44,8 +55,7 @@ def test_the_recovery_switch_clears_the_lock_and_the_count(identity, db):
                        reset_passwords=True)
     assert created.get("password resets") == 1
     assert created.get("lockouts cleared") == 1
-    admin = _admin(db)
-    assert admin.failed_login_count == 0 and admin.locked_until is None
+    assert _locks(db) == 0, "every address's lock is cleared"
     assert _sign_in(RECOVERED).status_code == 200
 
 
@@ -71,7 +81,7 @@ def test_a_re_applied_password_ends_the_sessions_minted_under_the_old_one(identi
 def test_without_the_switch_nothing_is_touched(identity, db):
     """It runs on every boot: a restart must never undo a password or a lock."""
     _lock(db)
+    assert _sign_in(ADMIN_PASSWORD).status_code == 401, "the planted lock holds"
     created = seed.run(db, admin_email=ADMIN_EMAIL, admin_password=RECOVERED)
     assert created == {}
-    admin = _admin(db)
-    assert admin.failed_login_count == 9 and admin.locked_until is not None
+    assert _locks(db) == 2
