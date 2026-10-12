@@ -36,7 +36,11 @@ if (REPO_ROOT / "backend" / "identity") != _HERE:
 # override=False: a value already in the environment wins over the file.
 load_dotenv(REPO_ROOT / ".env", override=False)
 
-SESSION_COOKIE = "maec_session"
+# Not "maec_session": that is the old Engineering Tools' own cookie, host-only
+# on et.mirageaec.com. Core's carries Domain=.mirageaec.com, so on that host the
+# browser would send two cookies of one name, and the old app could read
+# Core's as its own.
+SESSION_COOKIE = "maec_one_session"
 
 
 # ------------------------------------------------------------ environment

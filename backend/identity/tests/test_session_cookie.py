@@ -41,6 +41,18 @@ def _login(client):
                        json={"email": ENGINEER_EMAIL, "password": ENGINEER_PASSWORD})
 
 
+def test_the_cookie_is_named_maec_one_session_not_maec_session(identity):
+    """The old Engineering Tools' own cookie is maec_session, host-only on
+    et.mirageaec.com. Core's carries Domain=.mirageaec.com, so under the same
+    name the browser would send that host two of them, and the old app could
+    read Core's as its own."""
+    from backend.main import app
+    assert config.SESSION_COOKIE == "maec_one_session"
+    names = [v.split("=", 1)[0] for v in _login(TestClient(app)).headers.get_list("set-cookie")]
+    assert "maec_one_session" in names
+    assert "maec_session" not in names
+
+
 def test_unset_the_cookie_is_host_only_httponly_and_lax(identity):
     from backend.main import app
     attributes = _attributes(_set_cookie(_login(TestClient(app))))
@@ -114,7 +126,7 @@ login = client.post("/api/auth/login", json={"email": "engineer@mirageaec.com",
                                              "password": "Purple-Monkey-Dishwasher-2"})
 csrf = login.json()["csrf_token"]
 logout = client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf})
-pick = lambda r: [v for v in r.headers.get_list("set-cookie") if v.startswith("maec_session=")]
+pick = lambda r: [v for v in r.headers.get_list("set-cookie") if v.startswith("maec_one_session=")]
 print(json.dumps({"login": pick(login), "logout": pick(logout)}))
 '''
 
@@ -138,6 +150,6 @@ def test_with_a_domain_set_sign_in_and_sign_out_both_carry_it():
     assert _attributes(signed_in)["samesite"] == "lax"
 
     [signed_out] = headers["logout"]
-    assert signed_out.startswith("maec_session=null")
+    assert signed_out.startswith("maec_one_session=null")
     assert _attributes(signed_out)["domain"] == ".maec.local"
     assert "1970" in _attributes(signed_out)["expires"]

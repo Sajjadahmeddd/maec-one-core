@@ -281,7 +281,7 @@ def test_a_token_never_outlives_the_subscription(engineer_client, app_client, db
 def test_the_endpoint_needs_no_session(app_client, engineer_client, et):
     """app_client has never signed in, and sends no CSRF header."""
     client, secret = et
-    assert "maec_session" not in app_client.cookies
+    assert config.SESSION_COOKIE not in app_client.cookies
     assert exchange(app_client, client.client_id, secret,
                     _code(engineer_client, client)).status_code == 200
 

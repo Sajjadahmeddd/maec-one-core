@@ -227,7 +227,7 @@ In a browser, open **https://auth.mirageaec.com** and sign in as the
 bootstrap admin. You land on the admin panel.
 
 Open the developer tools → **Application** (Chrome) or **Storage** (Firefox)
-→ **Cookies** → `https://auth.mirageaec.com`. The cookie `maec_session` must
+→ **Cookies** → `https://auth.mirageaec.com`. The cookie `maec_one_session` must
 show:
 
 * Domain **`.mirageaec.com`** — not `auth.mirageaec.com`;

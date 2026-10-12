@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
 
 from backend.identity import router_auth, router_gate
+from backend.identity.config import SESSION_COOKIE
 from backend.identity.models import AuditLog
 from backend.identity.resolution import now
 
@@ -48,7 +49,7 @@ def _call(address="203.0.113.50", *, secret="x" * 43, method="GET", origin=None,
     if origin:
         headers["X-Original-Origin"] = origin
     if cookie:
-        headers["Cookie"] = f"maec_session={cookie}"
+        headers["Cookie"] = f"{SESSION_COOKIE}={cookie}"
     return caller.get(GATE, headers=headers)
 
 
