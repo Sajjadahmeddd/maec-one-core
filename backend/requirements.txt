@@ -1,23 +1,67 @@
 # MAEC One Core.
 #
-# Pruned by import, not by guess: every package below is imported by
+# Pinned, every package, to the exact versions the suite last passed on.
+# Unpinned, they drifted between two sessions (FastAPI 0.142 -> 0.143,
+# SQLAlchemy 2.1.3 -> 2.1.4) and a deploy would have installed whatever was
+# newest that day. To upgrade: change a pin, run the whole suite with the
+# PostgreSQL tests running, and commit the two together.
+#
+# Pruned by import, not by guess: every direct dependency below is imported by
 # backend/identity/ or backend/main.py. The HAP-specific ones the original
-# carried — pymupdf, openpyxl, pillow — belong to Engineering Tools and are
-# not here.
+# carried — pymupdf, openpyxl, pillow — belong to Engineering Tools.
 
-fastapi>=0.110
-uvicorn[standard]>=0.27
-itsdangerous>=2.1          # signs the session cookie (via SessionMiddleware)
-python-multipart>=0.0.9    # the CSV upload on the onboarding screen
-
-sqlalchemy>=2.0
-alembic
-psycopg[binary]
-argon2-cffi
-python-dotenv
-slowapi
-pyjwt[crypto]>=2.8         # signs the OIDC tokens (RS256) and serves the JWKS
+# --- direct
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+itsdangerous==2.2.0          # signs the session cookie (via SessionMiddleware)
+python-multipart==0.0.32     # the CSV upload on the onboarding screen
+SQLAlchemy==2.1.4
+alembic==1.20.0
+psycopg[binary]==3.3.6
+argon2-cffi==25.1.0
+python-dotenv==1.2.4
+slowapi==0.1.10
+PyJWT[crypto]==2.15.1        # signs the OIDC tokens (RS256) and serves the JWKS
 
 # --- tests
-pytest
-httpx                      # fastapi.testclient
+pytest==9.1.1
+httpx==0.28.1                # fastapi.testclient
+
+# --- pulled in by the above, pinned so they cannot move underneath it
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+argon2-cffi-bindings==26.1.0
+certifi==2026.7.22
+cffi==2.1.1
+click==8.5.0
+cryptography==50.0.2
+Deprecated==3.0.0
+h11==0.16.0
+httpcore==1.0.9
+httptools==0.9.0
+idna==3.20
+iniconfig==2.3.1
+limits==5.8.0
+Mako==1.4.3
+MarkupSafe==3.0.4
+opentelemetry-api==1.45.1
+packaging==26.3
+pluggy==1.6.0
+psycopg-binary==3.3.6
+pycparser==3.11
+pydantic==2.14.0
+pydantic_core==2.50.0
+Pygments==2.21.0
+PyYAML==6.0.3
+starlette==1.7.0
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+watchfiles==1.3.0
+websockets==17.2
+wrapt==2.5.0
+
+# --- one platform or the other
+colorama==0.4.6 ; sys_platform == "win32"     # pytest's colours on Windows
+tzdata==2026.5 ; sys_platform == "win32"      # psycopg's time zones on Windows
+uvloop==0.23.0 ; sys_platform != "win32"      # uvicorn[standard]'s event loop on Linux
