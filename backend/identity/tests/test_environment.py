@@ -37,7 +37,7 @@ def _start(**settings):
     env = {**os.environ, "DATABASE_URL": "sqlite+pysqlite:///:memory:",
            "MAEC_ENV": "", "SESSION_SECRET": "", "MAEC_SECRET_KEY": "",
            "OIDC_PRIVATE_KEY": "", "OIDC_KEY_ID": "", "RENDER": "",
-           "GATE_SECRETS": "", "CORE_PUBLIC_URL": ""}
+           "GATE_SECRETS": "", "CORE_PUBLIC_URL": "", "SESSION_COOKIE_DOMAIN": ""}
     env.update(settings)
     return subprocess.run([sys.executable, "-c", _START], cwd=REPO, env=env,
                           capture_output=True, text=True, timeout=120)
@@ -46,7 +46,9 @@ def _start(**settings):
 # ----------------------------------------------------------- start-up
 @pytest.mark.parametrize("environment", ["", "production", "staging"])
 def test_outside_development_core_will_not_start_without_a_session_secret(environment):
-    done = _start(MAEC_ENV=environment, OIDC_PRIVATE_KEY=_KEY)
+    done = _start(MAEC_ENV=environment, OIDC_PRIVATE_KEY=_KEY,
+                  CORE_PUBLIC_URL="https://auth.mirageaec.com",
+                  SESSION_COOKIE_DOMAIN=".mirageaec.com")
     assert done.returncode != 0 and "started" not in done.stdout
     assert "SESSION_SECRET is not set" in done.stderr
 
@@ -58,9 +60,41 @@ def test_outside_development_core_will_not_start_without_a_signing_key(environme
     assert "OIDC_PRIVATE_KEY is not set" in done.stderr
 
 
-def test_in_production_with_both_core_starts():
-    done = _start(MAEC_ENV="production", SESSION_SECRET="a-real-secret-for-this-test",
-                  OIDC_PRIVATE_KEY=_KEY)
+# Everything production needs, so each test below can take one thing away.
+PRODUCTION = {"MAEC_ENV": "production", "SESSION_SECRET": "a-real-secret-for-this-test",
+              "OIDC_PRIVATE_KEY": _KEY, "CORE_PUBLIC_URL": "https://auth.mirageaec.com",
+              "SESSION_COOKIE_DOMAIN": ".mirageaec.com"}
+
+
+def test_in_production_with_everything_core_starts():
+    done = _start(**PRODUCTION)
+    assert done.returncode == 0, done.stderr[-2000:]
+    assert "started" in done.stdout
+
+
+def test_in_production_without_a_public_url_core_will_not_start():
+    """Without it, sign-in links are built from the caller's address —
+    http://maec-core:8000 when an app asks over the Docker network."""
+    done = _start(**{**PRODUCTION, "CORE_PUBLIC_URL": ""})
+    assert done.returncode != 0 and "started" not in done.stdout
+    assert "CORE_PUBLIC_URL is not set" in done.stderr
+
+
+def test_in_production_a_plain_http_public_url_will_not_start():
+    done = _start(**{**PRODUCTION, "CORE_PUBLIC_URL": "http://auth.mirageaec.com"})
+    assert done.returncode != 0 and "started" not in done.stdout
+    assert "CORE_PUBLIC_URL must be https in production" in done.stderr
+
+
+def test_in_production_without_a_cookie_domain_core_will_not_start():
+    """Without it the cookie is host-only, and single sign-on silently stops."""
+    done = _start(**{**PRODUCTION, "SESSION_COOKIE_DOMAIN": ""})
+    assert done.returncode != 0 and "started" not in done.stdout
+    assert "SESSION_COOKIE_DOMAIN is not set" in done.stderr
+
+
+def test_in_development_neither_is_needed():
+    done = _start(MAEC_ENV="development", CORE_PUBLIC_URL="", SESSION_COOKIE_DOMAIN="")
     assert done.returncode == 0, done.stderr[-2000:]
     assert "started" in done.stdout
 

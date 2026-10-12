@@ -184,6 +184,45 @@ def core_public_url(fallback: str | None = None) -> str | None:
     return value
 
 
+def check_production_settings() -> None:
+    """Refuse to start in production without what single sign-on needs.
+
+    Outside development (MAEC_ENV), both must be set, or Core stops here:
+
+    * CORE_PUBLIC_URL, and https. Without it the gate builds its sign-in
+      links from the address its caller used — http://maec-core:8000 when an
+      app asks over the Docker network, which no browser can reach. Over plain
+      http the session cookie would never be marked Secure, and HSTS never
+      sent, for anyone who follows a link.
+    * SESSION_COOKIE_DOMAIN. Without it the cookie stays host-only: sign-in at
+      Core works, and every app behind the gate silently sees nobody.
+
+    Development keeps the fallbacks, so a laptop needs neither.
+    """
+    from urllib.parse import urlsplit
+
+    if is_development():
+        return
+    url = core_public_url()
+    if not url:
+        raise RuntimeError(
+            "CORE_PUBLIC_URL is not set. In production it must be Core's public "
+            "https address, e.g. https://auth.mirageaec.com: without it, sign-in "
+            "links are built from the caller's address — http://maec-core:8000 "
+            "when an app asks over the Docker network, which no browser can "
+            "reach. On a developer's machine, set MAEC_ENV=development instead.")
+    if urlsplit(url).scheme != "https":
+        raise RuntimeError(
+            f"CORE_PUBLIC_URL must be https in production, not {url!r}: sign-in "
+            "links would send people to plain http.")
+    if not session_cookie_domain():
+        raise RuntimeError(
+            "SESSION_COOKIE_DOMAIN is not set. In production it must be the "
+            "domain every app shares, e.g. .mirageaec.com: without it the "
+            "session cookie is host-only and single sign-on silently stops "
+            "working. On a developer's machine, set MAEC_ENV=development instead.")
+
+
 # Long enough that guessing one is not a plan: token_urlsafe(32) gives 43.
 MIN_GATE_SECRET = 32
 

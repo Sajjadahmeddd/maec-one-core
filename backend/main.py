@@ -50,6 +50,9 @@ keys.signing_key()
 # every gate check — every request of every app — into a 500.
 identity_config.gate_secrets()
 identity_config.core_public_url()
+# ...and, in production, refuse to start without what single sign-on needs:
+# CORE_PUBLIC_URL (https) and SESSION_COOKIE_DOMAIN.
+identity_config.check_production_settings()
 
 
 @asynccontextmanager
