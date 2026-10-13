@@ -605,6 +605,137 @@ of real use has gone well.
 
 ---
 
+## Project Management — bring its people into Core
+
+Core already knows Project Management: the seed registers the application
+`projects` (one permission, `projects:app:use`, allowed for every built-in
+role) and an uncapped subscription. It stays `coming_soon` with no address
+until you make it live (the end of this section).
+
+What the import does with each of Project Management's 61 accounts:
+
+| In Project Management | In Core |
+|---|---|
+| `bu_head` (4 accounts, 2 people) | Global Admin, plus a Project Management seat |
+| `engineer` (57) | Normal User / Engineer for `projects`, plus a Project Management seat |
+
+Everyone keeps their current password: the hash is carried over and becomes
+argon2id at their first sign-in to Core. The 54 engineers still on their
+temporary password must change it, exactly as today.
+
+**The CSV holds password hashes. It never leaves the server, and is shredded
+at the end.**
+
+### Export, read-only, from Project Management's database
+
+Placeholders: `<PM_DB_SERVICE>` (its database service in the `promanage`
+compose project), `<PM_DB_USER>`, `<PM_DB_NAME>`, `<PM_USERS_TABLE>`. This
+assumes its database is PostgreSQL; the query only reads, in a read-only
+transaction.
+
+```bash
+cd <PROMANAGE_FOLDER>
+# Works from Project Management's own folder, so compose finds its project.
+
+(umask 077 && docker compose exec -T -e PGOPTIONS='-c default_transaction_read_only=on' \
+  <PM_DB_SERVICE> psql -U <PM_DB_USER> -d <PM_DB_NAME> -v ON_ERROR_STOP=1 -c "
+COPY (
+  WITH mapping(username, email) AS (VALUES
+    ('bu.anitha', 'bu.anitha@mirageaec.com'),
+    ('bu.mohan',  'bu.mohan@mirageaec.com'))
+  SELECT COALESCE(m.email, u.username) AS email,
+         u.full_name                  AS name,
+         u.role                       AS role,
+         u.password_hash              AS password_hash,
+         'promanage_pbkdf2'           AS password_scheme,
+         u.must_change_password       AS must_change_password
+  FROM <PM_USERS_TABLE> u
+  LEFT JOIN mapping m ON m.username = u.username
+  WHERE u.role IN ('bu_head', 'engineer')
+  ORDER BY u.id
+) TO STDOUT WITH (FORMAT csv, HEADER)" > ~/pm-users.csv)
+# Writes every account to ~/pm-users.csv, created readable by you only
+# (umask 077). The database is opened read-only; nothing in it changes. The
+# two plain usernames become their @mirageaec.com addresses through the
+# two-row mapping, and nothing else is altered.
+
+ls -l ~/pm-users.csv && wc -l ~/pm-users.csv
+# Must show -rw------- and 62 lines: the header and 61 accounts.
+```
+
+### Dry run — writes nothing
+
+```bash
+cd /opt/maec-one-core
+# Core's folder, for its compose file.
+
+docker compose -f deploy/compose.yml --env-file deploy/env.production exec -T core \
+  python -m backend.identity.import_users --file - < ~/pm-users.csv
+# Reads the CSV from your shell into the Core container — the file itself is
+# never copied in — and prints what a commit would do, by row number only.
+```
+
+Expect `summary: create 61, add role 0, add seat 0, skip 0` and a warning for
+the one email outside @mirageaec.com. If it says the file is rejected, it names
+the rows and why; nothing was written — fix the export, not the database.
+
+### Commit
+
+```bash
+docker compose -f deploy/compose.yml --env-file deploy/env.production exec -T core \
+  python -m backend.identity.import_users --file - --commit \
+  --temp-passwords-out /tmp/pm-temp-passwords.csv < ~/pm-users.csv
+# Creates the 61 accounts, their roles and seats, in one transaction: all or
+# nothing. Every row carries a hash, so no temporary password should be
+# needed; if any is, it goes to that file inside the container, mode 600,
+# never to the screen.
+
+docker compose -f deploy/compose.yml --env-file deploy/env.production exec -T core \
+  python -m backend.identity.import_users --file - --commit \
+  --temp-passwords-out /tmp/pm-temp-passwords-2.csv < ~/pm-users.csv
+# Runs it again. Must print "nothing to do": the import is idempotent.
+```
+
+If the commit did write temporary passwords, copy them out, hand them over
+in person, then delete both copies:
+
+```bash
+(umask 077 && docker compose -f deploy/compose.yml --env-file deploy/env.production \
+  cp core:/tmp/pm-temp-passwords.csv ~/pm-temp-passwords.csv)
+# Copies the file out of the container, readable by you only.
+
+docker compose -f deploy/compose.yml --env-file deploy/env.production exec core \
+  rm /tmp/pm-temp-passwords.csv
+# Deletes the copy inside the container.
+```
+
+### Shred the export
+
+```bash
+shred -u ~/pm-users.csv
+# Overwrites the CSV and deletes it: it held every password hash.
+```
+
+(Shred `~/pm-temp-passwords.csv` the same way once the passwords are handed out.)
+
+### Make Project Management live in Core — at deploy time
+
+When the gated Project Management is ready at `https://pm.mirageaec.com`:
+
+```bash
+docker compose -f deploy/compose.yml --env-file deploy/env.production exec core-db \
+  psql -U maec_core -d maec_identity -c "UPDATE applications SET status = 'live', base_url = 'https://pm.mirageaec.com' WHERE key = 'projects';"
+# Makes Project Management live and tells Core its address. Expect "UPDATE 1".
+# The seed never undoes it.
+```
+
+Then add its gate secret to Core's `GATE_SECRETS` (`,projects=<generated as
+in 3c>`) and restart Core; add the DNS A record and a Caddy block for
+`pm.mirageaec.com`, as for Engineering Tools. `promanage.mirageaec.com` is not
+touched.
+
+---
+
 ## If Core goes down
 
 Engineering Tools shows **"MAEC One is unavailable"** on every page until Core
