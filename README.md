@@ -192,7 +192,7 @@ and signs out the sessions minted under the old password. Then unset it.
 .venv/Scripts/python -m pytest
 ```
 
-577 tests. 555 run against an in-memory SQLite; 21 run against the PostgreSQL
+586 tests. 564 run against an in-memory SQLite; 21 run against the PostgreSQL
 in your `.env` and cover what SQLite cannot — column widths, CHECK
 constraints, the append-only trigger, the migrations run up and down with data
 present, real concurrency on single-use authorization codes, and a session
@@ -246,6 +246,11 @@ be set:
 ```sql
 UPDATE applications SET base_url = 'http://et.maec.local:8080' WHERE key = 'engineering';
 ```
+
+An app's "Change password" link goes to `${CORE_PUBLIC_URL}/change-password`,
+for everyone. Anyone signed in changes theirs there — the current password,
+then the new one; every other session they hold is signed out — and lands on
+the launcher. Someone not signed in signs in first and comes back to it.
 
 ## The launcher
 
