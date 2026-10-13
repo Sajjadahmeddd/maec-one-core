@@ -360,6 +360,15 @@ div.module-tile:not(.built) { opacity: .72; }
 
 .launch-signout:hover { color: var(--ink); }
 
+.launch-menu { display: flex; justify-content: center; gap: 18px; }
+
+/* explicit colours: the --green tokens are Engineering Tools', not defined here */
+.launch-notice {
+  margin: 0 0 12px; padding: 9px 12px;
+  background: #E8F5EC; border: 1px solid #BFE3CB; border-radius: 9px;
+  color: #1E6B3F; font-size: 12.5px; font-weight: 600;
+}
+
 /* ---- footer ---- */
 .signin-footer {
   flex: none;

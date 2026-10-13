@@ -12,7 +12,7 @@
 
 import MaecOne, { BADGES, ICONS, INTERNAL, PRESENTATION, isOpenable } from './MaecOne.jsx'
 
-export default function Launcher({ session, onOpen, onAdmin, onSignOut }) {
+export default function Launcher({ session, notice, onOpen, onAdmin, onChangePassword, onSignOut }) {
   const apps = session?.apps || []
   const open = apps.filter(isOpenable)
   const rest = apps.length - open.length
@@ -33,6 +33,8 @@ export default function Launcher({ session, onOpen, onAdmin, onSignOut }) {
         <ICONS.shieldCheck width="15" height="15" />
         Signed in
       </p>
+
+      {notice && <p className="launch-notice" role="status">{notice}</p>}
 
       <h2 className="signin-welcome">Welcome back</h2>
       <p className="launch-name">{session?.display_name || 'MAEC'}</p>
@@ -96,9 +98,14 @@ export default function Launcher({ session, onOpen, onAdmin, onSignOut }) {
         </p>
       )}
 
-      <button type="button" className="launch-signout" onClick={onSignOut}>
-        Sign out
-      </button>
+      <div className="launch-menu">
+        <button type="button" className="launch-signout" onClick={onChangePassword}>
+          Change password
+        </button>
+        <button type="button" className="launch-signout" onClick={onSignOut}>
+          Sign out
+        </button>
+      </div>
 
       <ul className="signin-badges">
         {BADGES.map(([label, sub]) => (

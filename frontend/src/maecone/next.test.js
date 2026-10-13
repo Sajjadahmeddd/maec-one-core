@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { safeNext } from './next.js'
+import { CHANGE_PASSWORD, safeNext, signInFirst } from './next.js'
 
 const HERE = 'http://auth.maec.local:8000'
 const APPS = [
@@ -24,6 +24,23 @@ test('a page in a live app with an address is followed, exactly', () => {
 test('the authorize path on this origin is still followed', () => {
   const path = '/oauth/authorize?client_id=x&state=s'
   assert.equal(safeNext(path, APPS, HERE), path)
+})
+
+test('the change-password page on this origin is followed', () => {
+  assert.equal(safeNext('/change-password', APPS, HERE), '/change-password')
+})
+
+test('change-password, not signed in: to sign-in, and back after', () => {
+  const there = signInFirst(CHANGE_PASSWORD)
+  assert.equal(there, '/?next=%2Fchange-password')
+  const back = new URL(there, HERE).searchParams.get('next')
+  assert.equal(safeNext(back, APPS, HERE), CHANGE_PASSWORD)
+})
+
+test('no other page sends anyone to sign in first', () => {
+  for (const page of ['/', '/admin', '/admin/users', '/change-password/x', '/oauth/authorize']) {
+    assert.equal(signInFirst(page), null, page)
+  }
 })
 
 // Each of these must land on the launcher: safeNext answers null.
@@ -47,6 +64,10 @@ const NEAR_MISSES = {
   'Core itself, absolute': 'http://auth.maec.local:8000/admin',
   'a relative path other than authorize': '/admin',
   'authorize, but on another host via the path': '//evil.com/oauth/authorize',
+  'change-password, dotted out of': '/change-password/../admin',
+  'change-password, as a prefix': '/change-passwordx',
+  'change-password, on another host': '//evil.com/change-password',
+  'change-password, absolute on Core': 'http://auth.maec.local:8000/change-password',
   'a tab inside the host': 'http://et.maec\t.local:8080/',
   'empty': '',
 }

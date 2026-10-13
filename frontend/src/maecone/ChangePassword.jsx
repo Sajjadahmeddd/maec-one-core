@@ -1,15 +1,20 @@
-// The way out of an administrator-set password.
+// Choosing your own password — required, or because you want to.
 //
-// Shown whenever `must_change_password` is set, over everything else — there
-// is nowhere else to go, because the server refuses every other call with
-// "Password change required." This screen is not the enforcement; it is the
-// only door the enforcement leaves open.
+// Required: shown whenever `must_change_password` is set, over everything
+// else — there is nowhere else to go, because the server refuses every other
+// call with "Password change required." This screen is not the enforcement;
+// it is the only door the enforcement leaves open.
+//
+// Voluntary (`voluntary`): /change-password, for anyone signed in — the
+// launcher's menu and every app's "Change password" link come here. Same
+// form, same server rules; the way out is back to the launcher rather than
+// signing out.
 
 import { useState } from 'react'
 import MaecOne, { BADGES, ICONS } from './MaecOne.jsx'
 import { auth } from './api'
 
-export default function ChangePassword({ session, onChanged, onSignOut }) {
+export default function ChangePassword({ session, voluntary = false, onChanged, onSignOut, onCancel }) {
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -36,13 +41,20 @@ export default function ChangePassword({ session, onChanged, onSignOut }) {
     <form className="signin-card" onSubmit={submit}>
       <div className="signin-mark"><img src="/maec-logo.png" alt="" /></div>
 
-      <h2 className="signin-welcome">Choose your password</h2>
+      <h2 className="signin-welcome">{voluntary ? 'Change your password' : 'Choose your password'}</h2>
       <p className="signin-sub">{session?.email}</p>
 
-      <p className="launch-lede">
-        Your password was set by an administrator, so they know it. Choose one
-        of your own to continue — nothing else will open until you do.
-      </p>
+      {voluntary ? (
+        <p className="launch-lede">
+          Enter your current password, then the new one. You stay signed in
+          here; everywhere else you are signed in is signed out.
+        </p>
+      ) : (
+        <p className="launch-lede">
+          Your password was set by an administrator, so they know it. Choose one
+          of your own to continue — nothing else will open until you do.
+        </p>
+      )}
 
       <label className="signin-label" htmlFor="maec-current">Current password</label>
       <div className="signin-field">
@@ -77,12 +89,18 @@ export default function ChangePassword({ session, onChanged, onSignOut }) {
 
       <button type="submit" className="signin-submit"
               disabled={!current || !next || !confirm || busy}>
-        {busy ? 'Saving…' : 'Set password and continue'}
+        {busy ? 'Saving…' : voluntary ? 'Change password' : 'Set password and continue'}
       </button>
 
-      <button type="button" className="launch-signout" onClick={onSignOut}>
-        Sign out instead
-      </button>
+      {voluntary ? (
+        <button type="button" className="launch-signout" onClick={onCancel}>
+          Back
+        </button>
+      ) : (
+        <button type="button" className="launch-signout" onClick={onSignOut}>
+          Sign out instead
+        </button>
+      )}
 
       <ul className="signin-badges">
         {BADGES.map(([label, sub]) => (
