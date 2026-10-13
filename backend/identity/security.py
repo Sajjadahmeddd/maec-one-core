@@ -12,7 +12,9 @@ signed in, whatever the signature says. OPEN-DECISIONS #5.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
+import re
 import secrets
 
 from argon2 import PasswordHasher
@@ -33,14 +35,55 @@ _hasher = PasswordHasher()   # argon2id, library defaults
 _DUMMY_HASH = _hasher.hash(secrets.token_urlsafe(24))
 
 
+# ------------------------------------------- Project Management's hashes
+# People imported from Project Management keep the password they already
+# have: their hash is carried over as it is (import_users.py) and verified
+# here until their first sign-in, which re-hashes it to argon2id
+# (router_auth.login, via needs_rehash). So the old format disappears as people
+# sign in, and nothing else in Core ever has to know it.
+#
+# Exactly one shape, the whole string, and nothing looser:
+#
+#     pbkdf2_sha256$<salt: 32 lowercase hex>$<digest: 64 lowercase hex>
+#
+# PBKDF2-HMAC-SHA256, 100,000 iterations (fixed in that app's code, not stored
+# in the hash), the salt hex-decoded to 16 bytes, a 32-byte digest stored as
+# hex. Not Django's format (which stores the iterations and uses base64) and
+# not passlib's. Anything else — uppercase hex, other lengths, an iteration
+# field, base64 — is not this format and stays "wrong password".
+PROMANAGE_HASH = re.compile(r"pbkdf2_sha256\$([0-9a-f]{32})\$([0-9a-f]{64})")
+PROMANAGE_ITERATIONS = 100_000
+
+
+def is_promanage_hash(password_hash: str | None) -> bool:
+    return bool(password_hash) and PROMANAGE_HASH.fullmatch(password_hash) is not None
+
+
+def _verify_promanage(password: str, password_hash: str) -> bool:
+    match = PROMANAGE_HASH.fullmatch(password_hash)
+    if match is None:
+        return False
+    salt, digest = bytes.fromhex(match.group(1)), bytes.fromhex(match.group(2))
+    candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt,
+                                    PROMANAGE_ITERATIONS)
+    return hmac.compare_digest(candidate, digest)
+
+
 # -------------------------------------------------------------- passwords
 def hash_password(password: str) -> str:
     return _hasher.hash(password)
 
 
 def verify_password(password: str, password_hash: str | None) -> bool:
-    """Constant-work verification. A missing hash still burns one argon2."""
+    """Constant-work verification. A missing hash still burns one argon2.
+
+    A Project Management hash is verified as PBKDF2 instead (above). Every other
+    path — argon2, an unknown address's dummy hash, anything unrecognised — is
+    exactly as it was.
+    """
     try:
+        if is_promanage_hash(password_hash):
+            return _verify_promanage(password, password_hash)
         return _hasher.verify(password_hash or _DUMMY_HASH, password)
     except (VerifyMismatchError, InvalidHashError):
         return False
@@ -49,6 +92,10 @@ def verify_password(password: str, password_hash: str | None) -> bool:
 
 
 def needs_rehash(password_hash: str) -> bool:
+    """Should this hash be replaced at the next successful sign-in? Always
+    for a Project Management hash: that is how the old format disappears."""
+    if is_promanage_hash(password_hash):
+        return True
     try:
         return _hasher.check_needs_rehash(password_hash)
     except Exception:
