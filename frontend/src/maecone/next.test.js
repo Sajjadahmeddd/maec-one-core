@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { CHANGE_PASSWORD, safeNext, signInFirst } from './next.js'
+import { CHANGE_PASSWORD, backFrom, safeNext, signInFirst } from './next.js'
 
 const HERE = 'http://auth.maec.local:8000'
 const APPS = [
@@ -35,6 +35,19 @@ test('change-password, not signed in: to sign-in, and back after', () => {
   assert.equal(there, '/?next=%2Fchange-password')
   const back = new URL(there, HERE).searchParams.get('next')
   assert.equal(safeNext(back, APPS, HERE), CHANGE_PASSWORD)
+})
+
+test("change-password's Back: the Admin screen it came from", () => {
+  assert.equal(backFrom({ from: '/admin' }), '/admin')
+  assert.equal(backFrom({ from: '/admin/roles' }), '/admin/roles')
+})
+
+test("change-password's Back: anything else goes to the launcher", () => {
+  for (const state of [null, undefined, {}, { from: 7 }, { from: '/' }, { from: '//evil.com' },
+    { from: 'https://evil.com/admin' }, { from: '/admin/../oauth/authorize' },
+    { from: '/administrator' }, { from: '/admin//evil.com' }, { from: '/admin?x=1' }]) {
+    assert.equal(backFrom(state), '/', JSON.stringify(state))
+  }
 })
 
 test('no other page sends anyone to sign in first', () => {

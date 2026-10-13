@@ -18,7 +18,7 @@ import Login from './maecone/Login.jsx'
 import AdminShell from './maecone/admin/AdminShell.jsx'
 import { SESSION_EXPIRED, auth as authApi } from './maecone/api'
 import { INTERNAL } from './maecone/MaecOne.jsx'
-import { CHANGE_PASSWORD, safeNext, signInFirst } from './maecone/next.js'
+import { CHANGE_PASSWORD, backFrom, safeNext, signInFirst } from './maecone/next.js'
 
 /** A Global Admin lands in the panel; everyone else on the launcher. */
 const homeFor = (session) => (session?.is_global_admin ? '/admin' : '/')
@@ -44,7 +44,8 @@ function rawNext() {
 
 export default function App() {
   const navigate = useNavigate()
-  const { pathname } = useLocation()
+  const location = useLocation()
+  const { pathname } = location
 
   // read once: the address bar changes as soon as the client router navigates.
   // Set again only when /change-password sends someone to sign in first.
@@ -189,7 +190,7 @@ export default function App() {
           voluntary
           session={session}
           onChanged={changedVoluntarily}
-          onCancel={() => navigate('/')}
+          onCancel={() => navigate(backFrom(location.state))}
         />
       } />
 

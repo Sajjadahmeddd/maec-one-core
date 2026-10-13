@@ -9,13 +9,14 @@
 // on the server refuses /api/admin/* to anyone else, whatever the browser
 // believes, and the guard refuses the whole prefix a second time.
 
-import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 
 import AuditScreen from './AuditScreen.jsx'
 import OnboardingScreen from './OnboardingScreen.jsx'
 import ProvisioningScreen from './ProvisioningScreen.jsx'
 import RolesScreen from './RolesScreen.jsx'
 import UsersScreen from './UsersScreen.jsx'
+import { CHANGE_PASSWORD } from '../next.js'
 import ToolsScreen from './ToolsScreen.jsx'
 
 // The other products, as top-level pills. Only Global Admin is built; the
@@ -71,6 +72,7 @@ function Placeholder({ label, lede }) {
 
 export default function AdminShell({ session, onSignOut }) {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
 
   return (
     <div className="maec-admin">
@@ -104,6 +106,11 @@ export default function AdminShell({ session, onSignOut }) {
         <div className="maec-who">
           <span className="maec-who-email">{session?.email}</span>
           <span className="maec-avatar" aria-hidden="true">{initials(session?.email)}</span>
+          {/* the voluntary change; its Back returns to this screen */}
+          <button type="button" className="maec-btn secondary"
+                  onClick={() => navigate(CHANGE_PASSWORD, { state: { from: pathname } })}>
+            Change password
+          </button>
           <button type="button" className="maec-btn secondary" onClick={onSignOut}>
             Sign out
           </button>

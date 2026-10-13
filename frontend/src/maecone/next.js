@@ -78,6 +78,16 @@ export function safeNext(raw, apps, here) {
 }
 
 /**
+ * Where the change-password form's Back goes: the Admin screen it was opened
+ * from — router state, set by AdminShell — or else the launcher. Only an
+ * /admin path is taken from it; anything else goes to the launcher.
+ */
+export function backFrom(state) {
+  const from = state?.from
+  return typeof from === 'string' && /^\/admin(\/[\w-]+)*$/.test(from) ? from : '/'
+}
+
+/**
  * A page here that needs someone signed in, opened by someone who is not:
  * where to send them — the sign-in page, with a `next` that safeNext() will
  * bring them back by. null: nothing to do, sign-in shows in place.
