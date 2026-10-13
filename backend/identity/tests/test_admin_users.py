@@ -80,8 +80,9 @@ def test_the_form_options_come_from_real_subscriptions(admin_client):
     assert {r["key"] for r in body["roles"]} == {
         "global_admin", "business_admin", "project_lead", "employee"}
     apps = {a["key"]: a for a in body["applications"]}
-    assert list(apps) == ["engineering"]      # the only one subscribed
+    assert list(apps) == ["engineering", "projects"]      # the two subscribed
     assert apps["engineering"]["seats"] is None          # uncapped in the seed
+    assert apps["projects"]["seats"] is None
     assert apps["engineering"]["seats_in_use"] == 2
     assert body["password_rules"]["min_length"] == 8
 

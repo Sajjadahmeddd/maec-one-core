@@ -110,10 +110,24 @@ def test_a_lead_may_only_grant_what_they_themselves_hold(db):
                     scope_type="application", scope_id="engineering"))
     db.commit()
 
-    # employee is below project_lead and every employee permission is one
-    # the lead holds: allowed
-    accounts.grant_role(db, actor=lead, target=engineer, role=role(db, "employee"),
-                        scope_type="project", scope_id="P-2291")
+    # employee is below project_lead, and scoped to Engineering Tools every
+    # employee permission it can reach is one the lead holds: allowed. (Employee
+    # also allows projects:app:use, but a grant scoped to engineering cannot
+    # reach Project Management, so that is not the lead's to hold.)
+    newcomer = User(org_id=admin.org_id, email="newcomer@mirageaec.com",
+                    display_name="Newcomer", password_hash="x", status="active")
+    db.add(newcomer)
+    db.flush()
+    accounts.grant_role(db, actor=lead, target=newcomer, role=role(db, "employee"),
+                        scope_type="application", scope_id="engineering")
+
+    # At project scope it is refused: a project id belongs to no one
+    # application (OPEN-DECISIONS #4), so a project grant reaches every
+    # application's permissions for that project — Project Management's
+    # included, which this lead does not hold.
+    with pytest.raises(accounts.EscalationError, match="projects:app:use"):
+        accounts.grant_role(db, actor=lead, target=engineer, role=role(db, "employee"),
+                            scope_type="project", scope_id="P-2291")
 
     # business_admin sits above the lead: refused, and recorded
     with pytest.raises(accounts.EscalationError):

@@ -46,7 +46,9 @@ APPLICATIONS = [
     ("projects", "Project Management", "Plan, track and deliver projects efficiently", "coming_soon"),
     ("finance", "Finance & Billing", "Expenses, monitoring and invoice generation", "coming_soon"),
     ("people", "People & HR", "Attendance, leave, timesheet & more", "coming_soon"),
-    ("timesheet", "Timesheet", "Submit and manage your timesheets", "live"),
+    # coming_soon: nothing is behind it yet. Seeded as live before Prompt 15;
+    # run() corrects an existing database (see "-- corrections").
+    ("timesheet", "Timesheet", "Submit and manage your timesheets", "coming_soon"),
     ("expenses", "Expense Control", "Track, approve and monitor expenses", "coming_soon"),
     ("attendance", "Attendance", "Daily attendance and team overview", "coming_soon"),
     ("kpa", "KPI", "Manage KPIs and performance goals", "coming_soon"),
@@ -82,6 +84,13 @@ ROLE_DEFAULTS: dict[str, dict[str, dict[str, str]]] = {
         "hapaudit": {"view": "allow", "convert": "deny", "export": "deny", "configure": "deny"},
     },
 }
+
+# Project Management keeps its own roles (Business Head, Engineer, project
+# leads). Core only decides who gets in, so the application has exactly one
+# permission, and every built-in role is allowed it; the seat is what decides.
+PROJECTS_PERMISSIONS = [("app", "use")]
+PROJECTS_ROLE_DEFAULTS = {role: "allow" for role in
+                          ("global_admin", "business_admin", "project_lead", "employee")}
 
 FAR_FUTURE = datetime(2099, 12, 31, tzinfo=timezone.utc)
 
@@ -124,6 +133,17 @@ def run(db: Session, *, admin_email: str, admin_password: str,
             made("applications")
         apps[key] = app
 
+    # -- corrections to rows an earlier seed wrote. Only what is stated here,
+    # and only from the old value: a person's later, deliberate change wins.
+    # Timesheet was seeded live with nothing behind it. Corrected while it is
+    # still live with no address; once someone gives it a base_url and makes it
+    # live, this never touches it again.
+    timesheet = apps["timesheet"]
+    if timesheet.status == "live" and timesheet.base_url is None:
+        timesheet.status = "coming_soon"
+        db.flush()
+        made("application corrections")
+
     # -- roles (system: org_id NULL)
     roles: dict[str, Role] = {}
     for key, name, level, description in ROLES:
@@ -164,12 +184,37 @@ def run(db: Session, *, admin_email: str, admin_password: str,
                     made("role_permissions")
     db.flush()
 
-    # -- the subscription
-    if _one(db, Subscription, org_id=org.id, application_id=engineering.id) is None:
-        db.add(Subscription(org_id=org.id, application_id=engineering.id,
-                            valid_from=datetime.now(timezone.utc), valid_to=FAR_FUTURE))
-        db.flush()
-        made("subscriptions")
+    # -- Project Management: one permission, allowed for every built-in role.
+    # The application stays as the seed made it (coming_soon, no base_url):
+    # the person makes it live, at https://pm.mirageaec.com, at deploy time.
+    projects = apps["projects"]
+    for module, action in PROJECTS_PERMISSIONS:
+        key = f"projects:{module}:{action}"
+        permission = _one(db, Permission, key=key)
+        if permission is None:
+            permission = Permission(
+                key=key, application_id=projects.id, module_key=module, action=action,
+                description="Use Project Management")
+            db.add(permission)
+            db.flush()
+            made("permissions")
+        for role_key, effect in PROJECTS_ROLE_DEFAULTS.items():
+            role = roles[role_key]
+            if _one(db, RolePermission, role_id=role.id, permission_id=permission.id) is None:
+                db.add(RolePermission(role_id=role.id, permission_id=permission.id,
+                                      effect=effect))
+                made("role_permissions")
+    db.flush()
+
+    # -- the subscriptions: Engineering Tools and Project Management, neither
+    # capped (seats NULL). Seats are still per person; there is just no limit
+    # on how many the organisation may hand out.
+    for application in (engineering, projects):
+        if _one(db, Subscription, org_id=org.id, application_id=application.id) is None:
+            db.add(Subscription(org_id=org.id, application_id=application.id,
+                                valid_from=datetime.now(timezone.utc), valid_to=FAR_FUTURE))
+            db.flush()
+            made("subscriptions")
 
     # -- the first Global Admin
     admin = _user(db, org, admin_email, admin_password, "Global Admin", made,

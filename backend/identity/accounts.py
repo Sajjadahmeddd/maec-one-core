@@ -28,7 +28,7 @@ from .models import (
     Application, Role, RolePermission, Subscription, User, UserLicense, UserRole,
 )
 from .permissions import (
-    GLOBAL_ADMIN, active_roles, audit, bump_permissions_version, can,
+    GLOBAL_ADMIN, active_roles, app_of, audit, bump_permissions_version, can,
     is_builtin, is_global_admin, now,
 )
 
@@ -129,6 +129,14 @@ def may_grant(db: Session, *, actor: User, target_org_id, role: Role,
     allowed = db.scalars(select(RolePermission).where(
         RolePermission.role_id == role.id, RolePermission.effect == "allow")).all()
     for rp in allowed:
+        # Only what this grant can actually confer. A grant scoped to one
+        # application reaches no other application's permissions —
+        # resolution.covers() ignores it there — so holding those is not the
+        # actor's business. Without this, adding Project Management's
+        # projects:app:use to Employee stopped an Engineering Tools lead
+        # granting Employee for Engineering Tools.
+        if scope_type == "application" and app_of(rp.permission.key) != scope_id:
+            continue
         if not can(db, actor, rp.permission.key, probe):
             return f"actor does not hold {rp.permission.key}"
     return None

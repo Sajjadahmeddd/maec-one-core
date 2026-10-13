@@ -21,6 +21,13 @@ const BADGE = {
 
 const TITLE = { view: 'View', convert: 'Convert', export: 'Export', configure: 'Configure' }
 
+/** "engineering:hapext" -> "hapext"; another application's modules carry its
+ *  name, so two applications' modules can never be mistaken for each other. */
+function moduleLabel(qualified) {
+  const [app, module] = qualified.split(':')
+  return app === 'engineering' ? module : `${app} · ${module}`
+}
+
 export default function RolesScreen() {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
@@ -143,7 +150,7 @@ export default function RolesScreen() {
             <thead>
               <tr>
                 <th>Role &amp; Persona</th>
-                {data.modules.map((m) => <th key={m}>{m}</th>)}
+                {data.modules.map((m) => <th key={m}>{moduleLabel(m)}</th>)}
                 <th>Users</th>
                 <th />
               </tr>
@@ -211,9 +218,13 @@ export default function RolesScreen() {
                 <tbody>
                   {data.modules.map((m) => (
                     <tr key={m}>
-                      <td><strong>{m}</strong></td>
+                      <td><strong>{moduleLabel(m)}</strong></td>
                       {data.actions.map((a) => {
-                        const key = `engineering:${m}:${a}`
+                        // a module only has some actions: no switch for the rest
+                        if (!(data.module_actions?.[m] || []).includes(a)) {
+                          return <td key={a}><span className="maec-sub">—</span></td>
+                        }
+                        const key = `${m}:${a}`
                         const effect = role.permissions[key]
                         return (
                           <td key={a}>

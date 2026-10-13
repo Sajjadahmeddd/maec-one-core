@@ -74,8 +74,13 @@ def _summarise(effects: dict[str, str], module: str, actions: list[str]) -> str:
 
     The Figma names badges the model has no concept of (Personal Load,
     Capacity View). These four are what the data can actually support.
+
+    `module` is qualified by its application ("engineering:hapext") and
+    `actions` are the ones THAT module has. Judged against every action in the
+    registry, a module from one application could never be "full" once another
+    application brought an action it lacks.
     """
-    allowed = [a for a in actions if effects.get(f"engineering:{module}:{a}") == "allow"]
+    allowed = [a for a in actions if effects.get(f"{module}:{a}") == "allow"]
     if not allowed:
         return "none"
     if len(allowed) == len(actions):
@@ -92,7 +97,7 @@ def _role_json(db: Session, role: Role, registry: list[Permission],
     by_id = {p.id: p for p in registry}
     effects = {by_id[r.permission_id].key: r.effect for r in rows if r.permission_id in by_id}
 
-    modules, actions = _registry_shape(registry)
+    modules, _actions, module_actions = _registry_shape(registry)
     return {
         "id": str(role.id),
         "key": role.key,
@@ -103,23 +108,34 @@ def _role_json(db: Session, role: Role, registry: list[Permission],
         "is_system": role.org_id is None,
         "user_count": holders.get(role.id, 0),
         "permissions": effects,
-        "summary": {m: _summarise(effects, m, actions) for m in modules},
+        "summary": {m: _summarise(effects, m, module_actions[m]) for m in modules},
     }
 
 
-def _registry_shape(registry: list[Permission]) -> tuple[list[str], list[str]]:
-    modules, actions = [], []
+def _registry_shape(registry: list[Permission]
+                    ) -> tuple[list[str], list[str], dict[str, list[str]]]:
+    """The grid's shape, from the registry: modules qualified by their
+    application ("engineering:hapext", "projects:app"), every action in use,
+    and which actions each module actually has. Module names are only unique
+    within an application, so they are never shown or keyed without it."""
+    modules: list[str] = []
+    actions: list[str] = []
+    module_actions: dict[str, list[str]] = {}
     for p in registry:
-        if p.module_key not in modules:
-            modules.append(p.module_key)
+        module = f"{p.key.split(':', 1)[0]}:{p.module_key}"
+        if module not in modules:
+            modules.append(module)
+        module_actions.setdefault(module, [])
+        if p.action not in module_actions[module]:
+            module_actions[module].append(p.action)
         if p.action not in actions:
             actions.append(p.action)
-    return modules, actions
+    return modules, actions, module_actions
 
 
 def _registry(db: Session) -> list[Permission]:
-    return list(db.scalars(select(Permission).order_by(
-        Permission.module_key, Permission.action)).all())
+    # by key: application, then module, then action
+    return list(db.scalars(select(Permission).order_by(Permission.key)).all())
 
 
 def _holder_counts(db: Session) -> dict[uuid.UUID, int]:
@@ -211,7 +227,7 @@ def list_roles(db: Session = Depends(get_db),
     column without being edited.
     """
     registry = _registry(db)
-    modules, actions = _registry_shape(registry)
+    modules, actions, module_actions = _registry_shape(registry)
     holders = _holder_counts(db)
     roles = db.scalars(select(Role).where(
         (Role.org_id.is_(None)) | (Role.org_id == actor.org_id)
@@ -219,8 +235,10 @@ def list_roles(db: Session = Depends(get_db),
 
     return {
         "roles": [_role_json(db, r, registry, holders) for r in roles],
+        # qualified: "engineering:hapext". A permission key is module + ":" + action.
         "modules": modules,
         "actions": actions,
+        "module_actions": module_actions,
         "permissions": [
             {"key": p.key, "module_key": p.module_key, "action": p.action,
              "description": p.description}

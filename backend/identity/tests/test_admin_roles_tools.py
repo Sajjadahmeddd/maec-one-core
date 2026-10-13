@@ -44,9 +44,15 @@ def db_user(db, email):
 # ------------------------------------------------------- 001: reading
 def test_roles_are_drawn_from_the_real_registry(admin_client):
     body = admin_client.get(ROLES).json()
-    assert body["modules"] == ["airsizer", "hapaudit", "hapext", "rebadge"]
-    assert body["actions"] == ["configure", "convert", "export", "view"]
-    assert len(body["permissions"]) == 16
+    # qualified by application: module names are only unique within one
+    assert body["modules"] == ["engineering:airsizer", "engineering:hapaudit",
+                               "engineering:hapext", "engineering:rebadge", "projects:app"]
+    assert body["actions"] == ["configure", "convert", "export", "view", "use"]
+    # each module lists only the actions it actually has
+    assert body["module_actions"]["engineering:hapext"] == [
+        "configure", "convert", "export", "view"]
+    assert body["module_actions"]["projects:app"] == ["use"]
+    assert len(body["permissions"]) == 17          # 16 for Engineering Tools, 1 for PM
     assert {r["key"] for r in body["roles"]} == {
         "global_admin", "business_admin", "project_lead", "employee"}
 
@@ -61,11 +67,13 @@ def test_a_role_carries_its_real_allow_and_deny_rows(admin_client):
 
 def test_the_badge_is_derived_not_invented(admin_client):
     body = admin_client.get(ROLES).json()
-    assert role_named(body, "global_admin")["summary"]["hapext"] == "full"
+    assert role_named(body, "global_admin")["summary"]["engineering:hapext"] == "full"
     # the employee is allowed view/convert/export but denied configure
-    assert role_named(body, "employee")["summary"]["hapext"] == "partial"
+    assert role_named(body, "employee")["summary"]["engineering:hapext"] == "partial"
     # and on hapaudit only view is allowed
-    assert role_named(body, "employee")["summary"]["hapaudit"] == "view"
+    assert role_named(body, "employee")["summary"]["engineering:hapaudit"] == "view"
+    # Project Management's one module has one action, and every role holds it
+    assert role_named(body, "employee")["summary"]["projects:app"] == "full"
 
 
 # ------------------------------------------------------- 001: writing
@@ -415,9 +423,9 @@ def test_clearing_a_rule_bumps_the_holders_too(admin_client, db):
 
 def test_the_matrix_lists_the_real_modules(admin_client):
     body = admin_client.get(TOOLS).json()
-    assert [m["module_key"] for m in body["modules"]] == [
-        "airsizer", "hapaudit", "hapext", "rebadge"]
-    assert all(m["application_key"] == "engineering" for m in body["modules"])
+    assert [(m["application_key"], m["module_key"]) for m in body["modules"]] == [
+        ("engineering", "airsizer"), ("projects", "app"), ("engineering", "hapaudit"),
+        ("engineering", "hapext"), ("engineering", "rebadge")]
     levels = {lvl["key"] for lvl in body["levels"]}
     assert levels == {"full", "edit", "view", "hidden", "no_access"}
 
