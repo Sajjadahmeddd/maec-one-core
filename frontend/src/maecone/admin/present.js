@@ -21,32 +21,15 @@ export function roleOrder(roles = []) {
   ]
 }
 
+// Tool-Level Settings has two levels (OPEN-DECISIONS #22): who may open a tool.
 const ACCESS = {
   full: { label: 'Full Access', tone: 'granted' },
-  edit: { label: 'Edit', tone: 'granted' },
-  partial: { label: 'Partial', tone: 'scoped' },
-  view: { label: 'View Only', tone: 'scoped' },
-  hidden: { label: 'Hidden', tone: 'inactive' },
-  none: { label: 'No Access', tone: 'denied' },
+  no_access: { label: 'No Access', tone: 'denied' },
 }
 
-/**
- * What a role can do with a tool here: what the role grants (`summary`, from
- * /api/admin/roles: full | partial | view | none), narrowed by this
- * organisation's tool rule if there is one. A rule only ever takes access
- * away — so nothing granted is nothing, whatever the rule says.
- *
- * @returns {{ key, label, tone, ruled }}  ruled: a tool rule is in force
- */
-export function effectiveAccess(summary, ruleLevel) {
-  const granted = ACCESS[summary] ? summary : 'none'
-  if (granted === 'none') return { key: 'none', ...ACCESS.none, ruled: !!ruleLevel }
-  if (!ruleLevel || ruleLevel === 'full') {
-    return { key: granted, ...ACCESS[granted], ruled: ruleLevel === 'full' }
-  }
-  const key = ruleLevel === 'no_access' ? 'none' : ruleLevel
-  return { key, ...(ACCESS[key] || ACCESS.none), ruled: true }
-}
+/** A grid cell, as /api/admin/tool-rules sends it: "full" or "no_access".
+ *  Anything else reads as No Access — the engine refuses it too. */
+export const accessBadge = (level) => ACCESS[level] || ACCESS.no_access
 
 /** "Engineering Tools - hapext"; an application's single module is just its name. */
 export function toolLabel(module) {
@@ -55,11 +38,11 @@ export function toolLabel(module) {
     : `${module.application_name} - ${module.module_key}`
 }
 
-/** live -> Active; anything not yet live -> In-Active. */
-export function toolStatus(applicationStatus) {
-  return applicationStatus === 'live'
-    ? { label: 'Active', tone: 'neutral' }
-    : { label: 'In-Active', tone: 'rose' }
+/** A tool's Status on Tool-Level Settings: this organisation's switch. */
+export function toolStatus(status) {
+  return status === 'inactive'
+    ? { label: 'Inactive', tone: 'rose' }
+    : { label: 'Active', tone: 'neutral' }
 }
 
 // ------------------------------------------------------------------ audit

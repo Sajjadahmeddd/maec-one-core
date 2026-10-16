@@ -7,9 +7,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import {
-  actionLabel, batchColumns, batchLabel, batchStatus, effectiveAccess, heldIn,
-  posture, resultBadge, roleOrder, roleTone, shortWhen, sourceLabel, targetLabel,
-  toolLabel, toolStatus,
+  accessBadge, actionLabel, batchColumns, batchLabel, batchStatus, heldIn,
+  posture, resultBadge, roleOrder, roleTone, shortWhen, sourceLabel,
+  targetLabel, toolLabel, toolStatus,
 } from './present.js'
 
 const role = (key, name, level, is_system = true) => ({ key, name, level, is_system })
@@ -29,24 +29,13 @@ test('roles run from the everyday one up to Global Admin, then custom by name', 
   ])
 })
 
-test('effective access: what the role grants, when no rule narrows it', () => {
-  assert.equal(effectiveAccess('full').label, 'Full Access')
-  assert.equal(effectiveAccess('partial').label, 'Partial')
-  assert.equal(effectiveAccess('view').label, 'View Only')
-  assert.equal(effectiveAccess('none').label, 'No Access')
-  assert.equal(effectiveAccess(undefined).label, 'No Access')
-  assert.equal(effectiveAccess('full').ruled, false)
-})
-
-test('effective access: a rule narrows, and says it is a rule', () => {
-  assert.deepEqual(effectiveAccess('full', 'no_access'),
-                   { key: 'none', label: 'No Access', tone: 'denied', ruled: true })
-  assert.equal(effectiveAccess('full', 'view').label, 'View Only')
-  assert.equal(effectiveAccess('partial', 'hidden').label, 'Hidden')
-  assert.equal(effectiveAccess('full', 'edit').label, 'Edit')
-  // a rule cannot give back what the role does not grant
-  assert.equal(effectiveAccess('none', 'full').label, 'No Access')
-  assert.equal(effectiveAccess('none', 'view').label, 'No Access')
+test('two levels only: Full Access or No Access', () => {
+  assert.deepEqual(accessBadge('full'), { label: 'Full Access', tone: 'granted' })
+  assert.deepEqual(accessBadge('no_access'), { label: 'No Access', tone: 'denied' })
+  // the retired levels, or nothing, read as what the engine does: refuse
+  for (const old of ['view', 'edit', 'hidden', 'partial', undefined]) {
+    assert.equal(accessBadge(old).label, 'No Access', String(old))
+  }
 })
 
 test('tool rows and their status', () => {
@@ -54,8 +43,9 @@ test('tool rows and their status', () => {
                'Engineering Tools - hapext')
   assert.equal(toolLabel({ application_name: 'Project Management', module_key: 'app' }),
                'Project Management')
-  assert.equal(toolStatus('live').label, 'Active')
-  assert.equal(toolStatus('coming_soon').label, 'In-Active')
+  assert.equal(toolStatus('active').label, 'Active')
+  assert.equal(toolStatus('inactive').label, 'Inactive')
+  assert.equal(toolStatus(undefined).label, 'Active', 'no setting is active')
 })
 
 test('audit rows in words, unknown codes as written', () => {

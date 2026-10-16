@@ -195,6 +195,11 @@ export const admin = {
   },
 
   // ---- screen 002: per-organisation overrides
+  /** Switch a tool on (active) or off (inactive) for the whole organisation. */
+  putToolStatus(applicationKey, moduleKey, status) {
+    return send('PUT', '/api/admin/tool-status',
+                { application_key: applicationKey, module_key: moduleKey, status })
+  },
   toolRules() {
     return fetch('/api/admin/tool-rules').then(asJson)
   },

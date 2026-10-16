@@ -570,6 +570,24 @@
 /* a cell a tool rule has narrowed: outlined, so it reads as set by hand */
 .maec-chip.ruled { box-shadow: inset 0 0 0 1px currentColor; }
 
+/* a grid cell: a dropdown that looks like its pill, with a small caret */
+.maec-pill-select {
+  appearance: none; -webkit-appearance: none;
+  border: none; border-radius: 999px; cursor: pointer;
+  padding: 4px 24px 4px 12px; font-size: 11px; font-weight: 500;
+  background-repeat: no-repeat; background-position: right 9px center; background-size: 8px 5px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%235F6878'/%3E%3C/svg%3E");
+}
+.maec-pill-select.granted { background-color: var(--maec-granted-fill); color: var(--maec-granted-ink); }
+.maec-pill-select.denied  { background-color: var(--maec-denied-fill);  color: var(--maec-denied-ink); }
+.maec-pill-select.neutral { background-color: var(--maec-inactive-fill); color: var(--maec-inactive-ink); }
+.maec-pill-select.rose    { background-color: var(--maec-rose-fill);    color: var(--maec-rose-ink); }
+.maec-pill-select:focus-visible { outline: 2px solid var(--maec-focus); outline-offset: 2px; }
+.maec-pill-select:disabled { opacity: .6; cursor: progress; }
+.maec-pill-select option { background: var(--maec-card); color: var(--maec-ink); }
+/* a switched-off tool: its role cells read as not in force */
+.maec-row-off td:not(:last-child) .maec-pill-select { opacity: .55; }
+
 /* the role x tool matrix: pills centred under their role */
 .maec-matrix td, .maec-matrix th { text-align: center; }
 .maec-matrix td:first-child, .maec-matrix th:first-child { text-align: left; }
