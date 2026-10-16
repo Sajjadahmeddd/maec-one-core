@@ -449,3 +449,29 @@ def test_no_stat_card_is_a_proportion(admin_client):
     body = admin_client.get(f"{AUDIT}/stats").json()
     for key, value in body.items():
         assert isinstance(value, int), f"{key} is not a plain count"
+
+
+# ------------------------------------------------- readable targets
+def test_each_target_is_named_where_it_still_exists(admin_client, db):
+    """The screen shows "admin@…" and "Project Lead", not two UUIDs."""
+    admin = db_user(db, ADMIN_EMAIL)
+    lead = db_role(db, "project_lead")
+    audit(db, actor=admin, action="role.permission", target_type="role",
+          target_id=lead.id, result="success")
+    audit(db, actor=admin, action="user.update", target_type="user",
+          target_id="00000000-0000-0000-0000-000000000000", result="success")
+    audit(db, actor=admin, action="tool_rule.set", target_type="application",
+          target_id="engineering", result="success")
+
+    events = {e["action"]: e for e in admin_client.get(AUDIT).json()["events"]}
+    assert events["role.permission"]["target_label"] == "Project Lead"
+    assert events["login.success"]["target_label"] == ADMIN_EMAIL
+    assert events["tool_rule.set"]["target_label"] == "Engineering Tools"
+    # a target that no longer exists keeps its id and gets no name
+    assert events["user.update"]["target_label"] is None
+    assert events["user.update"]["target_id"] == "00000000-0000-0000-0000-000000000000"
+
+
+def test_every_control_has_a_short_label_for_the_posture_line(admin_client):
+    controls = admin_client.get(f"{AUDIT}/controls").json()["controls"]
+    assert controls and all(c["short"] and c["label"] for c in controls)

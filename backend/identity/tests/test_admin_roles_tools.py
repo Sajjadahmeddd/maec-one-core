@@ -470,3 +470,13 @@ def test_a_mutation_without_csrf_is_refused(admin_client, method, path):
     r = admin_client.request(method, path, json={"name": "x", "changes": []})
     assert r.status_code == 403
     assert "CSRF" in r.json()["detail"]
+
+
+def test_each_tool_row_carries_its_applications_status(admin_client):
+    """Tool-Level Settings shows Active for a live application's tools and
+    In-Active for one still coming soon — read from the registry."""
+    modules = admin_client.get("/api/admin/tool-rules").json()["modules"]
+    status = {(m["application_key"], m["module_key"]): m["application_status"]
+              for m in modules}
+    assert status[("engineering", "hapext")] == "live"
+    assert status[("projects", "app")] == "coming_soon"

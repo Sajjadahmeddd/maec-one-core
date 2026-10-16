@@ -104,6 +104,8 @@ def list_tool_rules(db: Session = Depends(get_db),
             continue
         seen.add((app.key, p.module_key))
         modules.append({"application_key": app.key, "application_name": app.name,
+                        # live or coming_soon: the screen's Active / In-Active
+                        "application_status": app.status,
                         "module_key": p.module_key})
 
     roles = db.scalars(select(Role).where(

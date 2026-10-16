@@ -226,8 +226,33 @@ def test_a_wrong_extension_is_refused(admin_client):
 def test_missing_columns_are_named(admin_client):
     data = csv_bytes([("Ada", "ada@mirageaec.com")], header=("name", "email"))
     body = upload(admin_client, data).json()
-    assert any("role_persona" in p and "department" in p
-               for p in body["file_problems"])
+    assert any("job_role" in p for p in body["file_problems"])
+    # department is optional, so it is never named as missing
+    assert not any("department" in p for p in body["file_problems"])
+
+
+def test_the_design_columns_import_without_a_department(admin_client):
+    """Name, Email, Job Role: the columns the onboarding screen names."""
+    data = csv_bytes([("Ada Lovelace", "ada@mirageaec.com", "employee")],
+                     header=("Name", "Email", "Job Role"))
+    body = upload(admin_client, data).json()
+    assert body["file_problems"] == [] and body["valid"] == 1, body
+    assert body["rows"][0]["role_key"] == "employee"
+
+
+def test_the_old_role_persona_header_still_imports(admin_client):
+    """Every other test here uploads role_persona; this one says why."""
+    body = upload(admin_client, csv_bytes(GOOD)).json()
+    assert body["valid"] == 2 and body["file_problems"] == []
+
+
+def test_a_job_role_may_be_the_roles_name(admin_client):
+    data = csv_bytes([("Ada Lovelace", "ada@mirageaec.com", "Normal User / Engineer"),
+                      ("Alan Turing", "alan@mirageaec.com", "no such role")],
+                     header=("name", "email", "job_role"))
+    rows = upload(admin_client, data).json()["rows"]
+    assert rows[0]["ok"] and rows[0]["role_key"] == "employee"
+    assert not rows[1]["ok"] and "no role named" in rows[1]["problems"][0]
 
 
 def test_too_many_rows_is_refused_during_the_parse(admin_client):
@@ -292,7 +317,8 @@ def test_the_template_lists_real_roles_and_escapes_formulas(admin_client, db):
     r = admin_client.get("/api/admin/import/template")
     assert r.status_code == 200
     rows = list(csv.reader(io.StringIO(r.content.decode("utf-8-sig"))))
-    assert rows[0] == list(admin_import.REQUIRED_COLUMNS)
+    assert rows[0] == ["name", "email", "job_role", "department"]
+    assert rows[0] == list(admin_import.TEMPLATE_COLUMNS)
     personas = {row[2] for row in rows[1:]}
     real = {x.key for x in db.scalars(select(Role)).all()}
     assert personas <= real                      # no invented role names
@@ -353,3 +379,49 @@ def test_every_import_action_is_audited(admin_client, db):
     assert "import.validate" in actions
     assert "import.commit" in actions
     assert "user.create" in actions
+
+
+# ------------------------------------------------------- one batch's people
+def _detail(client, batch_id):
+    return client.get(f"/api/admin/import/batches/{batch_id}")
+
+
+def test_a_batch_lists_its_people_as_planned_then_as_they_are(admin_client, db):
+    batch_id = upload(admin_client, csv_bytes(GOOD + [
+        ("Bad Row", "not-an-address", "employee", "Ops")])).json()["batch_id"]
+
+    planned = _detail(admin_client, batch_id).json()
+    assert planned["committed"] is False
+    assert [p["email"] for p in planned["people"]] == [
+        "ada@mirageaec.com", "alan@mirageaec.com"], "a failed row created nobody"
+    assert {p["status"] for p in planned["people"]} == {"planned"}
+    # placed across the organisation: the role applies in every application
+    assert planned["people"][0]["everywhere"] == {"name": "Normal User / Engineer",
+                                                  "level": 4}
+    assert {"engineering", "projects"} <= {a["key"] for a in planned["applications"]}
+
+    admin_client.post(COMMIT, headers=headers(admin_client), json={"batch_id": batch_id})
+    done = _detail(admin_client, batch_id).json()
+    assert done["committed"] is True
+    assert {p["status"] for p in done["people"]} == {"invited"}
+
+    # read from the account as it is now, not as it was imported
+    ada = db_user(db, "ada@mirageaec.com")
+    accounts.grant_role(db, actor=db_user(db, ADMIN_EMAIL), target=ada,
+                        role=db_role(db, "project_lead"), scope_type="application",
+                        scope_id="projects")
+    people = {p["email"]: p for p in _detail(admin_client, batch_id).json()["people"]}
+    assert people["ada@mirageaec.com"]["roles"] == {
+        "projects": {"name": "Project Lead", "level": 3}}
+    assert people["ada@mirageaec.com"]["everywhere"]["name"] == "Normal User / Engineer"
+
+
+def test_a_batch_that_is_not_ours_is_not_found(admin_client):
+    import uuid
+    assert _detail(admin_client, uuid.uuid4()).status_code == 404
+    assert _detail(admin_client, "not-a-uuid").status_code == 422
+
+
+def test_a_batch_is_global_admin_only(engineer_client, admin_client):
+    batch_id = upload(admin_client, csv_bytes(GOOD)).json()["batch_id"]
+    assert _detail(engineer_client, batch_id).status_code == 403

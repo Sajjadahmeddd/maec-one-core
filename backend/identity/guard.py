@@ -123,6 +123,7 @@ ROUTES: dict[str, Access] = {
     "/api/admin/import/validate": Access.ADMIN,
     "/api/admin/import/commit": Access.ADMIN,
     "/api/admin/import/batches": Access.ADMIN,
+    "/api/admin/import/batches/{batch_id}": Access.ADMIN,
     "/api/admin/import/template": Access.ADMIN,
     "/api/admin/provisioning": Access.ADMIN,
     "/api/admin/provisioning/{rule_id}": Access.ADMIN,

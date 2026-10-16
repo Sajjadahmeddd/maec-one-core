@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from . import config, security
 from .db import get_db
-from .models import Application, AuditLog, User
+from .models import Application, AuditLog, ImportBatch, Role, User
 from .permissions import (
     ANONYMOUS_ACTOR, BUSINESS_ADMIN, active_roles, holds_business_admin,
     is_builtin, is_global_admin, require_user,
@@ -144,7 +144,40 @@ def _filtered(db: Session, user: User, *, q: str = "", action: str = "",
     return select(AuditLog).where(*where)
 
 
-def _row_json(row: AuditLog, apps: dict[uuid.UUID, Application]) -> dict:
+def _target_labels(db: Session, rows: list[AuditLog],
+                   apps: dict[uuid.UUID, Application]) -> dict[tuple[str, str], str]:
+    """A readable name for each row's target — an address, a role's name, an
+    application's name, a file name — where the target still exists.
+
+    One query per kind of target on the page, not one per row. A target that
+    has since been deleted keeps no name, and the row shows its id instead:
+    the log records what happened to it, not what it is called today.
+    """
+    wanted: dict[str, set[uuid.UUID]] = {}
+    for row in rows:
+        if row.target_type in ("user", "role", "import_batch") and row.target_id:
+            try:
+                wanted.setdefault(row.target_type, set()).add(uuid.UUID(row.target_id))
+            except ValueError:
+                continue
+    labels: dict[tuple[str, str], str] = {}
+    for kind, model, column in (("user", User, User.email), ("role", Role, Role.name),
+                                ("import_batch", ImportBatch, ImportBatch.filename)):
+        if wanted.get(kind):
+            for key, label in db.execute(select(model.id, column).where(
+                    model.id.in_(wanted[kind]))).all():
+                labels[(kind, str(key))] = label
+    by_key = {a.key: a.name for a in apps.values()}
+    for a in apps.values():
+        by_key[str(a.id)] = a.name
+    for row in rows:
+        if row.target_type == "application" and row.target_id in by_key:
+            labels[("application", row.target_id)] = by_key[row.target_id]
+    return labels
+
+
+def _row_json(row: AuditLog, apps: dict[uuid.UUID, Application],
+              labels: dict[tuple[str, str], str] | None = None) -> dict:
     app = apps.get(row.application_id) if row.application_id else None
     return {
         "id": str(row.id),
@@ -158,7 +191,10 @@ def _row_json(row: AuditLog, apps: dict[uuid.UUID, Application]) -> dict:
         "action": row.action,
         "target_type": row.target_type,
         "target_id": row.target_id,
+        # the target's name where it still exists; null when it does not
+        "target_label": (labels or {}).get((row.target_type, row.target_id)),
         "application": app.key if app else None,
+        "application_name": app.name if app else None,
         "source": row.source,
         "result": row.result,
         "ip": row.ip,
@@ -193,9 +229,10 @@ def list_audit(request: Request, db: Session = Depends(get_db),
         query.order_by(AuditLog.created_at.desc())
         .offset((page - 1) * page_size).limit(page_size)).all()
     apps = {a.id: a for a in db.scalars(select(Application)).all()}
+    labels = _target_labels(db, rows, apps)
 
     return {
-        "events": [_row_json(r, apps) for r in rows],
+        "events": [_row_json(r, apps, labels) for r in rows],
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -255,24 +292,25 @@ def security_controls(db: Session = Depends(get_db),
 
     return {
         "controls": [
-            {"key": "hashing", "label": "Passwords hashed with argon2id",
+            {"key": "hashing", "short": "argon2id passwords",
+             "label": "Passwords hashed with argon2id",
              "on": True, "where": "identity/security.py"},
-            {"key": "password_policy",
+            {"key": "password_policy", "short": "Strong password policy",
              "label": f"Minimum {security.MIN_PASSWORD_LENGTH} characters, "
                       "mixed case, digit and symbol",
              "on": True, "where": "identity/security.py"},
-            {"key": "rate_limit",
+            {"key": "rate_limit", "short": "Sign-in rate limit",
              "label": f"Sign-in rate limited ({router_auth.LOGIN_RATE} per address)",
              "on": bool(router_auth.limiter.enabled), "where": "identity/router_auth.py"},
-            {"key": "lockout",
+            {"key": "lockout", "short": "Account lockout",
              "label": f"Account locks after {router_auth.LOCK_AFTER} failures "
                       "from one address, for that address, for escalating periods",
 
              "on": True, "where": "identity/router_auth.py"},
-            {"key": "csrf",
+            {"key": "csrf", "short": "CSRF protection",
              "label": "Every change made with a session requires a CSRF token",
              "on": True, "where": "identity/guard.py"},
-            {"key": "session",
+            {"key": "session", "short": "Revocable sessions",
              # read from the running configuration, not asserted
              "label": "Session cookie is "
                       + (f"shared across {config.session_cookie_domain()}"
@@ -281,14 +319,14 @@ def security_controls(db: Session = Depends(get_db),
                       f"{config.session_absolute_hours():g} h, "
                       f"{config.session_idle_minutes():g} min idle, revocable",
              "on": True, "where": "backend/main.py, identity/sessions.py"},
-            {"key": "append_only",
+            {"key": "append_only", "short": "Append-only audit log",
              "label": "Audit log is append-only in the database",
              "on": trigger if trigger is not None else False,
              "where": "migration 81e586581063",
              "note": None if trigger else
                      "Not verifiable on this database — the trigger is "
                      "PostgreSQL only."},
-            {"key": "per_request",
+            {"key": "per_request", "short": "Immediate suspension",
              "label": "Every request re-reads the account, so suspension is "
                       "immediate",
              "on": True, "where": "identity/guard.py"},

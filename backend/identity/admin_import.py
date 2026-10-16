@@ -37,15 +37,21 @@ from sqlalchemy.orm import Session
 
 from . import accounts
 from .db import get_db
-from .models import Application, ImportBatch, Role, Subscription, User
-from .permissions import audit, require_global_admin
+from .models import Application, ImportBatch, Role, Subscription, User, UserRole
+from .permissions import _utc as _as_utc, audit, now, require_global_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"],
                    dependencies=[Depends(require_global_admin)])
 
 MAX_BYTES = 25 * 1024 * 1024
 MAX_ROWS = 5_000
-REQUIRED_COLUMNS = ("name", "email", "role_persona", "department")
+# What a file must carry, and what it may. The template has all four.
+REQUIRED_COLUMNS = ("name", "email", "job_role")
+OPTIONAL_COLUMNS = ("department",)
+TEMPLATE_COLUMNS = REQUIRED_COLUMNS + OPTIONAL_COLUMNS
+# Files made from the template before the column was renamed still import:
+# their role_persona column is read as job_role.
+COLUMN_ALIASES = {"role_persona": "job_role"}
 FORMULA_LEADERS = ("=", "+", "-", "@", "\t", "\r")
 
 # Bytes that mean this is not a CSV whatever the extension claims. A renamed
@@ -135,6 +141,10 @@ def sniff(head: bytes, filename: str, content_type: str | None) -> list[str]:
     return problems
 
 
+def _column(header: str | None) -> str:
+    return "_".join((header or "").strip().lower().split())
+
+
 def read_records(upload: UploadFile) -> tuple[list[dict], list[str]]:
     """Stream the file into records, enforcing the caps as it goes.
 
@@ -166,7 +176,10 @@ def read_records(upload: UploadFile) -> tuple[list[dict], list[str]]:
         return [], ["That file is not valid UTF-8 text."]
 
     reader = csv.DictReader(io.StringIO(text))
-    headers = [(h or "").strip().lower() for h in (reader.fieldnames or [])]
+    # "Job Role", "job role" and "job_role" are the same column
+    headers = [_column(h) for h in (reader.fieldnames or [])]
+    headers = [COLUMN_ALIASES.get(h, h) if COLUMN_ALIASES.get(h) not in headers else h
+               for h in headers]
     missing = [c for c in REQUIRED_COLUMNS if c not in headers]
     if missing:
         return [], [f"Missing required column(s): {', '.join(missing)}."]
@@ -178,8 +191,10 @@ def read_records(upload: UploadFile) -> tuple[list[dict], list[str]]:
                 f"That file has more than {MAX_ROWS} rows. Split it and import "
                 "each part.")
             break
-        records.append({(k or "").strip().lower(): (v or "").strip()
-                        for k, v in row.items()})
+        record = {_column(k): (v or "").strip() for k, v in row.items()}
+        # the plan reads the role as role_persona, whichever header carried it
+        record["role_persona"] = record.get("job_role") or record.get("role_persona", "")
+        records.append(record)
     return records, problems
 
 
@@ -198,6 +213,7 @@ def plan(db: Session, actor: User, records: list[dict],
 
     roles = {r.key: r for r in db.scalars(select(Role).where(
         (Role.org_id.is_(None)) | (Role.org_id == actor.org_id))).all()}
+    by_name = {r.name.strip().lower(): r for r in roles.values()}
     org_domains = {actor.email.rsplit("@", 1)[-1].lower()}
     from .models import Organization
     org = db.get(Organization, actor.org_id)
@@ -243,7 +259,7 @@ def plan(db: Session, actor: User, records: list[dict],
         if row.email:
             seen.add(row.email)
         if not row.role_persona:
-            row.problems.append("role_persona is required")
+            row.problems.append("job_role is required")
 
         # ---- pass 2: resolution
         if row.email and _ADDRESS.match(row.email):
@@ -255,7 +271,9 @@ def plan(db: Session, actor: User, records: list[dict],
                     User.org_id == actor.org_id, User.email == row.email)):
                 row.problems.append("already has an account")
 
-        role = roles.get(row.role_persona.strip().lower().replace(" ", "_"))
+        # a role's key ("project_lead") or its name ("Project Lead")
+        wanted = row.role_persona.strip().lower()
+        role = roles.get(wanted.replace(" ", "_")) or by_name.get(wanted)
         if row.role_persona and role is None:
             row.problems.append(f"no role named {row.role_persona!r}")
         elif role is not None:
@@ -433,6 +451,81 @@ def batches(db: Session = Depends(get_db),
     return {"batches": [_batch_json(b, db) for b in rows]}
 
 
+@router.get("/import/batches/{batch_id}")
+def batch_detail(batch_id: uuid.UUID, db: Session = Depends(get_db),
+                 actor: User = Depends(require_global_admin)):
+    """One batch's people, and the role each holds in each application.
+
+    Once committed, read from the accounts as they are now — a role changed or
+    an account removed since shows as it is, not as it was imported. Before
+    that, what the preview planned, marked as planned. Rows that failed
+    validation created nobody and are not listed.
+
+    `roles` maps an application key to the role held there ({name, level}),
+    and `everywhere` is a role held across the organisation (or the platform)
+    — it applies in every application. A fixed number of queries, however
+    many people.
+    """
+    batch = db.get(ImportBatch, batch_id)
+    if batch is None or batch.org_id != actor.org_id:
+        raise HTTPException(status_code=404, detail="No such import.")
+
+    rows = [r for r in (batch.report or {}).get("rows", []) if r.get("ok")]
+    committed = batch.status in ("success", "warnings")
+    roles = {r.key: r for r in db.scalars(select(Role).where(
+        (Role.org_id.is_(None)) | (Role.org_id == actor.org_id))).all()}
+
+    def placed(role: Role, scope_type: str | None, scope_id: str | None,
+               into: dict) -> None:
+        held = {"name": role.name, "level": role.level}
+        if scope_type == "application" and scope_id:
+            into["roles"][scope_id] = held
+        elif scope_type in ("organization", "platform"):
+            into["everywhere"] = held
+
+    people: list[dict] = []
+    if committed:
+        emails = [r["email"] for r in rows]
+        users = {u.email: u for u in db.scalars(select(User).where(
+            User.org_id == actor.org_id, User.email.in_(emails))).all()} if emails else {}
+        moment = now()
+        grants = db.execute(
+            select(UserRole.user_id, Role, UserRole.scope_type, UserRole.scope_id,
+                   UserRole.expires_at)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(UserRole.user_id.in_([u.id for u in users.values()]))
+        ).all() if users else []
+        for row in rows:
+            person = users.get(row["email"])
+            entry = {"name": person.display_name if person else row["name"],
+                     "email": row["email"],
+                     "status": person.status if person else "removed",
+                     "roles": {}, "everywhere": None}
+            if person is not None:
+                for user_id, role, scope_type, scope_id, expires_at in grants:
+                    if user_id == person.id and (
+                            expires_at is None or _as_utc(expires_at) > moment):
+                        placed(role, scope_type, scope_id, entry)
+            people.append(entry)
+    else:
+        for row in rows:
+            entry = {"name": row["name"], "email": row["email"], "status": "planned",
+                     "roles": {}, "everywhere": None}
+            role = roles.get(row.get("role_key") or "")
+            if role is not None:
+                placed(role, row.get("scope_type"), row.get("scope_id"), entry)
+            people.append(entry)
+
+    apps = db.scalars(select(Application).order_by(Application.name)).all()
+    return {
+        "batch": _batch_json(batch, db),
+        "committed": committed,
+        "applications": [{"key": a.key, "name": a.name, "status": a.status}
+                         for a in apps],
+        "people": people,
+    }
+
+
 def _safe(value: str) -> str:
     """Same rule as the audit export: a template is a file people open."""
     text = str(value or "")
@@ -452,7 +545,7 @@ def template(db: Session = Depends(get_db),
 
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
-    writer.writerow(list(REQUIRED_COLUMNS))
+    writer.writerow(list(TEMPLATE_COLUMNS))
     for role in roles[:3]:
         writer.writerow([_safe(v) for v in (
             f"Example {role.name}", f"example.{role.key}@{domain}",
