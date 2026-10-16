@@ -21,7 +21,7 @@ from backend.identity.config import CSRF_HEADER, SESSION_COOKIE
 from backend.identity.models import (
     ToolSetting,
     Application, AuditLog, LoginSession, Organization, Permission, Role, ToolRule,
-    User, UserLicense,
+    User, UserLicense, UserRole,
 )
 from backend.identity.permissions import can
 from backend.identity.resolution import now
@@ -332,3 +332,27 @@ def test_the_cookie_is_never_logged(gate, caplog):
     assert cookie not in caplog.text
     assert "garbage-cookie-value" not in caplog.text
     assert "gate: bad_app refused" in caplog.text
+
+
+def test_a_seat_with_no_role_here_still_lets_them_in(gate, db):
+    """Found by the system test: a seat, but no role that reaches the app.
+    Nothing in the grid speaks for them, so the door does not shut — an app
+    with its own roles (Project Management) decides from there. Core sends no
+    permissions, and every module is left out of the navigation."""
+    engineer = _person(db)
+    for grant in db.scalars(select(UserRole).where(UserRole.user_id == engineer.id)).all():
+        db.delete(grant)
+    db.commit()
+    r = ask(_browser())
+    assert r.status_code == 200, r.text
+    assert r.json()["permissions"] == []
+    assert r.json()["nav_hidden"] == ["airsizer", "hapaudit", "hapext", "rebadge"]
+
+
+def test_every_tool_inactive_shuts_the_door_even_without_a_role(gate, db):
+    engineer = _person(db)
+    for grant in db.scalars(select(UserRole).where(UserRole.user_id == engineer.id)).all():
+        db.delete(grant)
+    db.commit()
+    _settle(db, inactive=("hapext", "airsizer", "hapaudit", "rebadge"))
+    _refused(ask(_browser()), 403, "no_access")

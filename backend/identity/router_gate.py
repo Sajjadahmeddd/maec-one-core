@@ -17,8 +17,8 @@ this route requires. They run in a fixed order and stop at the first failure.
     5  no password change is outstanding                    401 password_change
     6  their organisation is active                         403 org_suspended
     7  they hold a seat on the app                          403 no_access
-    8  something in it is theirs to use (Tool-Level         403 no_access
-       Settings: not every tool No Access or Inactive)
+    8  not shut out by Tool-Level Settings: every tool      403 no_access
+       Inactive, or a role here left with nothing
 
 Nothing here writes to the browser's cookie: the response goes to the app's
 server, and a Set-Cookie on it would be noise at best.
@@ -41,7 +41,7 @@ from . import config, security, sessions
 from .db import get_db
 from .models import Application, AuditLog, Permission, User
 from .permissions import audit, entitled, load, load_user, organization_active
-from .resolution import now, resolve
+from .resolution import covers, now, resolve
 from .router_auth import limiter
 
 router = APIRouter(tags=["gate"])
@@ -158,6 +158,29 @@ def _audit_no_access_once_an_hour(db: Session, request: Request, user: User,
               result="blocked", request=request)
 
 
+def shut_out(data, app: Application, db: Session) -> bool:
+    """Is an empty permission list the grid's doing, and so a refusal?
+
+    Yes when every tool of the app is switched off (Inactive is for everyone),
+    or when the person holds a role that reaches the app and the grid — or
+    the role itself — leaves them nothing there: the grid shows No Access for
+    them, and the door agrees.
+
+    No when they hold a seat but no role reaches the app. Nothing in the grid
+    speaks for them, and an app with its own roles (Project Management) decides
+    from there — the seat lets them in, as it did before #22. The system test
+    found the alternative: a tile that opened onto a refusal.
+    """
+    modules = set(db.scalars(select(Permission.module_key).where(
+        Permission.application_id == app.id)).all())
+    if modules and modules <= data.inactive_modules:
+        return True
+    moment = now()
+    return any(grant.in_force(moment)
+               and covers(grant, data.org_id, data.app_key, ("application", data.app_key))
+               for grant in data.grants)
+
+
 def permitted(data, app: Application, db: Session) -> tuple[list[str], list[str]]:
     """Every permission this person holds in the app, and the modules its
     navigation should leave out — from one load(), resolved in memory.
@@ -234,11 +257,10 @@ def check(request: Request, db: Session = Depends(get_db)):
         _audit_no_access_once_an_hour(db, request, user, app)
         return _refuse(request, 403, "no_access", app_key)
 
-    # 8. Something here they may use. A seat with every tool at No Access, or
-    #    switched off, opens nothing — so the app is refused at the door, as
-    #    for no seat, rather than opened onto an empty navigation.
-    allowed, nav_hidden = permitted(load(db, user, app.key), app, db)
-    if not allowed:
+    # 8. Not shut out by Tool-Level Settings (OPEN-DECISIONS #22).
+    data = load(db, user, app.key)
+    allowed, nav_hidden = permitted(data, app, db)
+    if not allowed and shut_out(data, app, db):
         _audit_no_access_once_an_hour(db, request, user, app)
         return _refuse(request, 403, "no_access", app_key)
 

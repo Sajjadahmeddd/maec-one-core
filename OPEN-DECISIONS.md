@@ -1119,10 +1119,15 @@ Partial and View Only, and offered a dropdown of all five.
 * **Status: Active or Inactive, per tool, per organisation** (`tool_settings`).
   Inactive refuses every action of the tool for everyone, Global Admins
   included, whatever roles and the grid say.
-* **The gate refuses an app with nothing left to open** (step 8, `403
-  no_access`): every tool No Access or Inactive. Without it, No Access on
-  Project Management's single tool would have let people in regardless, since
-  Project Management does not read Core's permission list.
+* **The gate refuses at the door when the grid shuts someone out** (step 8,
+  `403 no_access`): every tool of the app Inactive, or the person holds a role
+  that reaches the app and the grid (or the role) leaves them nothing there.
+  Without it, No Access on Project Management's single tool would have let
+  people in regardless, since Project Management does not read Core's
+  permission list. A seat with **no** role reaching the app still lets the
+  person in, with no permissions from Core — the app's own roles decide, as
+  before. (The first version of step 8 refused that case too; the system test
+  found it left a launcher tile that opened onto a refusal.)
 * **`nav_hidden`** is every module of the app the person can do nothing in.
 * **Existing rules** at migration: `edit`, `view` and `hidden` all left the
   role able to open the tool, so they became `full`; `no_access` stayed.

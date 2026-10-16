@@ -157,6 +157,16 @@ def grant_role(db: Session, *, actor: User, target: User, role: Role,
         _refuse(db, actor, target, role, scope_type, scope_id, request, why,
                 commit=commit)
 
+    # Asked, not left to uq_user_roles_grant: the constraint turns a repeat into
+    # a 500, and cannot see one at all at platform scope, where scope_id is NULL
+    # and PostgreSQL treats two NULLs as different.
+    same_scope = (UserRole.scope_id.is_(None) if scope_id is None
+                  else UserRole.scope_id == scope_id)
+    if db.scalar(select(UserRole.id).where(
+            UserRole.user_id == target.id, UserRole.role_id == role.id,
+            UserRole.scope_type == scope_type, same_scope)) is not None:
+        raise ValueError(f"{target.email} already holds {role.name} at that scope.")
+
     grant = UserRole(user_id=target.id, role_id=role.id, scope_type=scope_type,
                      scope_id=scope_id, granted_by=actor.id)
     db.add(grant)

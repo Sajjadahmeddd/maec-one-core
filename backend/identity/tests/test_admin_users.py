@@ -461,3 +461,23 @@ def test_a_licence_event_records_which_application(admin_client, db):
     row = audit_rows(db, "license.assign", "success")[0]
     app = db.scalar(select(Application).where(Application.key == "engineering"))
     assert row.application_id == app.id
+
+
+def test_granting_a_role_already_held_is_refused_not_a_500(admin_client, db):
+    """Found by the system test: the repeat reached uq_user_roles_grant and
+    came back as a 500. At platform scope the constraint does not see it at all
+    (two NULL scope ids are different to PostgreSQL), so it is asked first."""
+    engineer = db_user(db, ENGINEER_EMAIL)
+    grant = {"role_id": str(db_role(db, "employee").id),
+             "scope_type": "application", "scope_id": "engineering"}
+    r = admin_client.post(f"{USERS}/{engineer.id}/roles", headers=headers(admin_client), json=grant)
+    assert r.status_code == 422 and "already holds" in r.json()["detail"]
+
+    platform = {"role_id": str(db_role(db, "project_lead").id), "scope_type": "platform"}
+    assert admin_client.post(f"{USERS}/{engineer.id}/roles", headers=headers(admin_client),
+                             json=platform).status_code == 201
+    r = admin_client.post(f"{USERS}/{engineer.id}/roles", headers=headers(admin_client), json=platform)
+    assert r.status_code == 422
+    db.expire_all()
+    assert len(db.scalars(select(UserRole).where(UserRole.user_id == engineer.id,
+                                                 UserRole.scope_type == "platform")).all()) == 1
