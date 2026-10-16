@@ -17,6 +17,11 @@
 
 html, body, #root { height: 100%; margin: 0; }
 
+/* The reset the product's base stylesheet carried and the extraction left
+   behind. Without it a `width: 100%` field with padding is wider than its
+   box, which is how the sign-in fields came to run past the card. */
+*, *::before, *::after { box-sizing: border-box; }
+
 .tab.active { background: var(--navy); color: #fff; }
 
 .dropzone.active { border-color: var(--green); background: var(--green-soft); }
