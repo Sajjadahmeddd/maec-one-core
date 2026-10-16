@@ -14,7 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from slowapi import Limiter
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from . import accounts, lockout, security, sessions
@@ -68,43 +68,45 @@ def _apps_payload(db: Session, user: User | None) -> list[dict]:
     """The catalogue, and — for a signed-in person — what they may open.
 
     Computed here from subscriptions and seats, never from the client. The
-    launcher renders exactly this list.
+    launcher renders exactly this list: a tile for every application, which
+    opens when it is live, `entitled` is true, and it has a base_url.
 
-    Four queries, whatever the number of applications. Calling `entitled()`
-    once per app read the application, its subscription and the licence each
-    time — twenty-two queries for eight apps, on the endpoint every page load
-    hits. The reads below answer the same question: what exists, whether the
-    organisation is live, what it subscribes to, and which seats this person
-    holds. The organisation check is `entitled()`'s own, not a copy of it: this
-    list and the engine must never disagree about what someone may open.
+    One query for the catalogue, whatever the number of applications: each
+    application with this organisation's subscription to it and this
+    person's seat on it, outer-joined — at most one of each, by the unique
+    constraints on (org_id, application_id) and (user_id, application_id).
+    Calling `entitled()` once per app read the application, its subscription
+    and the licence each time — twenty-two queries for eight apps, on the
+    endpoint every page load hits. The organisation check is `entitled()`'s
+    own, not a copy of it: this list and the engine must never disagree about
+    what someone may open.
     """
-    apps = db.scalars(select(Application).order_by(Application.name)).all()
-    out = [{"key": a.key, "name": a.name, "description": a.description,
-            "status": a.status, "base_url": a.base_url} for a in apps]
     if user is None:
-        return out
+        apps = db.scalars(select(Application).order_by(Application.name)).all()
+        return [{"key": a.key, "name": a.name, "description": a.description,
+                 "status": a.status, "base_url": a.base_url} for a in apps]
 
-    if not organization_active(db, user):
-        for item in out:
-            item["entitled"] = False
-        return out
+    rows = db.execute(
+        select(Application, Subscription.valid_from, Subscription.valid_to,
+               UserLicense.id)
+        .outerjoin(Subscription, and_(Subscription.application_id == Application.id,
+                                      Subscription.org_id == user.org_id))
+        .outerjoin(UserLicense, and_(UserLicense.application_id == Application.id,
+                                     UserLicense.user_id == user.id))
+        .order_by(Application.name)
+    ).all()
 
+    # A suspended organisation holds nothing, whatever it has paid for.
+    active = organization_active(db, user)
     moment = now()
-    subscriptions = {
-        s.application_id: s for s in db.scalars(select(Subscription).where(
-            Subscription.org_id == user.org_id)).all()
-    }
-    seats = {
-        row for row in db.scalars(select(UserLicense.application_id).where(
-            UserLicense.user_id == user.id)).all()
-    }
-
-    for app, item in zip(apps, out):
-        sub = subscriptions.get(app.id)
-        in_date = (sub is not None
-                   and _as_utc(sub.valid_from) <= moment
-                   and (sub.valid_to is None or _as_utc(sub.valid_to) >= moment))
-        item["entitled"] = bool(in_date and app.id in seats)
+    out = []
+    for app, valid_from, valid_to, seat in rows:
+        in_date = (valid_from is not None
+                   and _as_utc(valid_from) <= moment
+                   and (valid_to is None or _as_utc(valid_to) >= moment))
+        out.append({"key": app.key, "name": app.name, "description": app.description,
+                    "status": app.status, "base_url": app.base_url,
+                    "entitled": bool(active and in_date and seat is not None)})
     return out
 
 
