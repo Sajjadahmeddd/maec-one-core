@@ -316,12 +316,14 @@ class UserRole(Base):
 
 
 class ToolRule(Base):
-    """A per-organisation adjustment to what a role may do with one module.
-    It can only take away: nothing here grants what the role did not allow."""
+    """One cell of the Tool-Level Settings grid: in this organisation, this role
+    has this module (full) or does not (no_access). It decides — `full` grants
+    every action of the module whatever the role's own permissions say.
+    OPEN-DECISIONS #22."""
     __tablename__ = "tool_rules"
     __table_args__ = (
         CheckConstraint(
-            "access_level IN ('full','edit','view','hidden','no_access')",
+            "access_level IN ('full','no_access')",
             name="ck_tool_rules_access_level"),
         CheckConstraint("status IN ('active','controlled')", name="ck_tool_rules_status"),
         UniqueConstraint("org_id", "application_id", "module_key", "role_id",
@@ -337,6 +339,30 @@ class ToolRule(Base):
     role_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("roles.id", ondelete="CASCADE"), nullable=False)
     access_level: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=now, onupdate=now)
+
+
+class ToolSetting(Base):
+    """A module's Status on Tool-Level Settings, for one organisation.
+    `inactive` switches the tool off for everyone in it: every action is
+    refused, whatever roles and the grid say. No row means active."""
+    __tablename__ = "tool_settings"
+    __table_args__ = (
+        CheckConstraint("status IN ('active','inactive')", name="ck_tool_settings_status"),
+        UniqueConstraint("org_id", "application_id", "module_key",
+                         name="uq_tool_settings_target"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("applications.id", ondelete="CASCADE"), nullable=False)
+    module_key: Mapped[str] = mapped_column(String(40), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"))

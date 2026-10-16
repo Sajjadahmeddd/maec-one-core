@@ -111,6 +111,7 @@ ROUTES: dict[str, Access] = {
     "/api/admin/roles": Access.ADMIN,
     "/api/admin/roles/{role_id}": Access.ADMIN,
     "/api/admin/tool-rules": Access.ADMIN,
+    "/api/admin/tool-status": Access.ADMIN,
     "/api/admin/users": Access.ADMIN,
     "/api/admin/users/options": Access.ADMIN,
     "/api/admin/users/{user_id}": Access.ADMIN,

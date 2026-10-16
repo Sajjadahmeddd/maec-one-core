@@ -1,20 +1,26 @@
 """Screen 002 — Tool-Level Settings.
 
-A per-organisation override on top of the role scheme: for one module and one
-role, narrow what that role may do here. Two rules carry the whole screen.
+The grid: one row per tool (an application's module), one column per role, and
+in each cell Full Access or No Access for this organisation — who may open the
+tool. Plus a Status per tool: Active, or Inactive — switched off for everyone.
+OPEN-DECISIONS #22.
 
-**A tool rule can only take away.** It runs after the role has decided and it
-can only subtract — that is structural, not a check. But an administrator who
-sets `full` on a module the role denies would reasonably expect that to grant
-something, and it never will. So the write path refuses a level that promises
-more than the role allows, rather than storing a rule that silently does
-nothing. A rule that lies about its effect is worse than no rule.
+**The grid says who may open a tool; the role says what they may do in it.**
+No Access takes the whole tool away from a role. Full Access leaves the role's
+own permissions to apply unchanged — an engineer with Full Access to HAPExt
+still may not configure it, because the employee role does not allow that.
+Applications that restrict people by their own roles (Project Management)
+need nothing more; Engineering Tools enforces the role's actions as Core
+sends them through the gate.
 
-**`hidden` and `no_access` are different states.** `hidden` takes the module
-out of the navigation and nothing more — the API still answers. `no_access`
-is the boundary: the API refuses. They are stored distinctly and enforced
-differently (see `_LEVEL_ALLOWS` in permissions.py). Collapsing them is how a
-panel ends up with a module that looks unavailable and is not.
+**A cell never claims access that does not exist.** Full Access for a role
+that allows nothing in the tool would open nothing, so the write is refused —
+audited — rather than stored. A cell nobody has set shows what the role says:
+Full Access when it allows anything in the tool, else No Access.
+
+**Inactive is the boundary for everyone.** Every action of an inactive tool is
+refused for every person in the organisation, Global Admins included; the
+gate refuses an application in which nothing is left to use.
 """
 
 from __future__ import annotations
@@ -28,11 +34,11 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from .models import (
-    Application, Permission, Role, RolePermission, ToolRule, User, UserRole,
+    Application, Permission, Role, RolePermission, ToolRule, ToolSetting, User,
+    UserRole,
 )
 from .permissions import (
-    HIDES_FROM_NAV, LEVEL_IMPLIES, audit, bump_permissions_version,
-    is_global_admin, require_global_admin,
+    LEVELS, audit, bump_permissions_version, require_global_admin,
 )
 
 # Global Admin on the prefix is the floor: every route added here
@@ -42,18 +48,17 @@ router = APIRouter(prefix="/api/admin", tags=["admin"],
                    dependencies=[Depends(require_global_admin)])
 
 # The level list is the engine's, not a copy of it: a level that exists here
-# and not in permissions.py would be accepted and then enforced as nothing.
-LEVELS = tuple(LEVEL_IMPLIES)
-STATUSES = ("active", "controlled")
+# and not in resolution.py would be accepted and then enforced as nothing.
+STATUSES = ("active", "inactive")
+RULE_STATUS = "active"          # tool_rules.status: kept, always "active"
 
 
 class ToolRuleChange(BaseModel):
     application_key: str = Field(max_length=40)
     module_key: str = Field(max_length=40)
     role_id: uuid.UUID
-    # None clears the rule: the role's own grants apply unmodified.
+    # None clears the cell: the role's own permissions decide again.
     access_level: str | None = None
-    status: str = "active"
 
     @field_validator("access_level")
     @classmethod
@@ -61,6 +66,16 @@ class ToolRuleChange(BaseModel):
         if value is not None and value not in LEVELS:
             raise ValueError(f"access_level must be one of {LEVELS} or null")
         return value
+
+
+class ToolRulesPut(BaseModel):
+    changes: list[ToolRuleChange] = Field(min_length=1, max_length=200)
+
+
+class ToolStatusPut(BaseModel):
+    application_key: str = Field(max_length=40)
+    module_key: str = Field(max_length=40)
+    status: str
 
     @field_validator("status")
     @classmethod
@@ -70,31 +85,54 @@ class ToolRuleChange(BaseModel):
         return value
 
 
-class ToolRulesPut(BaseModel):
-    changes: list[ToolRuleChange] = Field(min_length=1, max_length=200)
+def _tool(db: Session, application_key: str, module_key: str) -> Application:
+    """The application, if it has this module; 422 otherwise."""
+    app = db.scalar(select(Application).where(Application.key == application_key))
+    if app is None:
+        raise HTTPException(status_code=422, detail=f"Unknown application {application_key!r}.")
+    if db.scalar(select(Permission.id).where(Permission.application_id == app.id,
+                                             Permission.module_key == module_key)) is None:
+        raise HTTPException(status_code=422,
+                            detail=f"Unknown module {module_key!r} for {app.key}.")
+    return app
 
 
-def _role_allows(db: Session, role: Role, app_key: str, module: str) -> set[str]:
-    """The actions this role actually grants on this module."""
-    rows = db.execute(
-        select(Permission.action, RolePermission.effect)
-        .join(RolePermission, RolePermission.permission_id == Permission.id)
-        .where(RolePermission.role_id == role.id,
-               Permission.module_key == module)).all()
-    return {action for action, effect in rows if effect == "allow"}
+def _role_allows_any(db: Session, role: Role, app: Application, module_key: str) -> bool:
+    """Does this role allow anything at all in this tool?"""
+    return db.scalar(
+        select(RolePermission.role_id)
+        .join(Permission, Permission.id == RolePermission.permission_id)
+        .where(RolePermission.role_id == role.id, RolePermission.effect == "allow",
+               Permission.application_id == app.id,
+               Permission.module_key == module_key).limit(1)) is not None
 
 
+def _org_people(db: Session, org_id: uuid.UUID, role_id: uuid.UUID | None = None) -> set:
+    """Who re-resolves after a change: the holders of one role, or everyone in
+    the organisation who holds any role."""
+    query = select(UserRole.user_id).join(User, User.id == UserRole.user_id).where(
+        User.org_id == org_id)
+    if role_id is not None:
+        query = query.where(UserRole.role_id == role_id)
+    return set(db.scalars(query).all())
+
+
+# ------------------------------------------------------------------- routes
 @router.get("/tool-rules")
 def list_tool_rules(db: Session = Depends(get_db),
                     actor: User = Depends(require_global_admin)):
-    """The matrix: one row per module, one column per role.
+    """The grid: every tool, every role, and what each cell is.
 
-    Modules come from the seeded permission registry — the four real ones —
-    not from a list in this file.
+    Tools come from the seeded permission registry, not from a list in this
+    file. Each cell is "full" or "no_access" — the grid's setting where there
+    is one (`set: true`), else whether the role allows anything in the tool.
     """
     registry = db.scalars(select(Permission).order_by(
         Permission.module_key, Permission.action)).all()
     apps = {a.id: a for a in db.scalars(select(Application)).all()}
+    settings = {(s.application_id, s.module_key): s.status
+                for s in db.scalars(select(ToolSetting).where(
+                    ToolSetting.org_id == actor.org_id)).all()}
 
     modules: list[dict] = []
     seen: set[tuple[str, str]] = set()
@@ -104,43 +142,55 @@ def list_tool_rules(db: Session = Depends(get_db),
             continue
         seen.add((app.key, p.module_key))
         modules.append({"application_key": app.key, "application_name": app.name,
-                        # live or coming_soon: the screen's Active / In-Active
+                        # live or coming_soon: the application's own state
                         "application_status": app.status,
-                        "module_key": p.module_key})
+                        "module_key": p.module_key,
+                        # the Status column: this organisation's switch
+                        "status": settings.get((app.id, p.module_key), "active")})
 
     roles = db.scalars(select(Role).where(
         (Role.org_id.is_(None)) | (Role.org_id == actor.org_id)
     ).order_by(Role.level, Role.name)).all()
 
-    rules: dict[str, dict[str, dict]] = {}
+    # each role's own effects per tool, for the cells nobody has set
+    by_id = {p.id: p for p in registry}
+    own: dict[tuple[str, str], list[str]] = {}
+    for rp in db.scalars(select(RolePermission).where(
+            RolePermission.role_id.in_([r.id for r in roles]))).all():
+        perm = by_id.get(rp.permission_id)
+        app = apps.get(perm.application_id) if perm else None
+        if app is not None:
+            own.setdefault((f"{app.key}:{perm.module_key}", str(rp.role_id)), []).append(rp.effect)
+
+    rules = {}
     for rule in db.scalars(select(ToolRule).where(ToolRule.org_id == actor.org_id)).all():
         app = apps.get(rule.application_id)
-        if app is None:
-            continue
-        rules.setdefault(f"{app.key}:{rule.module_key}", {})[str(rule.role_id)] = {
-            "access_level": rule.access_level,
-            "status": rule.status,
-            "hides_from_nav": rule.access_level in HIDES_FROM_NAV,
-            "blocks_api": rule.access_level == "no_access",
-        }
+        if app is not None:
+            rules[(f"{app.key}:{rule.module_key}", str(rule.role_id))] = rule.access_level
+
+    cells: dict[str, dict[str, dict]] = {}
+    for m in modules:
+        tool = f"{m['application_key']}:{m['module_key']}"
+        for r in roles:
+            set_here = rules.get((tool, str(r.id)))
+            level = set_here or (
+                "full" if "allow" in own.get((tool, str(r.id)), []) else "no_access")
+            cells.setdefault(tool, {})[str(r.id)] = {"access_level": level,
+                                                     "set": set_here is not None}
 
     return {
         "modules": modules,
         "roles": [{"id": str(r.id), "key": r.key, "name": r.name, "level": r.level}
                   for r in roles],
-        "rules": rules,
+        "cells": cells,
         "levels": [
             {"key": "full", "label": "Full Access", "tone": "granted"},
-            {"key": "edit", "label": "Edit", "tone": "granted",
-             "note": "Everything except configuration."},
-            {"key": "view", "label": "View", "tone": "scoped"},
-            {"key": "hidden", "label": "Hidden", "tone": "inactive",
-             "note": "Removed from navigation. The API still answers — this is "
-                     "decluttering, not a security boundary."},
-            {"key": "no_access", "label": "No Access", "tone": "denied",
-             "note": "The API refuses. This is the security boundary."},
+            {"key": "no_access", "label": "No Access", "tone": "denied"},
         ],
-        "statuses": list(STATUSES),
+        "statuses": [
+            {"key": "active", "label": "Active"},
+            {"key": "inactive", "label": "Inactive"},
+        ],
     }
 
 
@@ -148,82 +198,47 @@ def list_tool_rules(db: Session = Depends(get_db),
 def put_tool_rules(body: ToolRulesPut, request: Request,
                    db: Session = Depends(get_db),
                    actor: User = Depends(require_global_admin)):
-    """Apply a set of changes. Any rejection rejects the whole set.
+    """Set cells of the grid. Any unknown target rejects the whole set.
 
-    Two passes, the shape of admin_import's plan() and apply(): every change
-    is resolved and checked first, writing nothing, and only a set with no
-    rejection is written — then committed once.
-
-    The order is what makes the first sentence true. A refusal is audited
-    with its own commit on the session this route shares, so when changes
-    were applied as the loop walked them, a batch whose second change
-    overreached committed the first and still answered 409.
-    See OPEN-DECISIONS #13.
+    Two passes: every change is resolved and checked first, writing nothing,
+    and only a set with no rejection is written — then committed once. A
+    refusal is audited with its own commit, which is why nothing is written
+    before every change has passed. OPEN-DECISIONS #13.
     """
     # ---- pass 1: resolve and check. Nothing is written in this pass.
-    #
-    # A change naming something that does not exist is refused on the spot
-    # with no audit row: there is no rule to record. A change naming real
-    # things but promising more than the role grants is collected, so one
-    # refusal names everything wrong with the set.
     planned: list[tuple[ToolRuleChange, Application, Role]] = []
     for change in body.changes:
-        app = db.scalar(select(Application).where(
-            Application.key == change.application_key))
-        if app is None:
-            raise HTTPException(status_code=422,
-                                detail=f"Unknown application {change.application_key!r}.")
-
+        app = _tool(db, change.application_key, change.module_key)
         role = db.get(Role, change.role_id)
         if role is None:
             raise HTTPException(status_code=422, detail="Unknown role.")
-        if role.org_id is not None and role.org_id != actor.org_id \
-                and not is_global_admin(db, actor):
+        if role.org_id is not None and role.org_id != actor.org_id:
             raise HTTPException(status_code=404, detail="No such role.")
-
-        known = db.scalar(select(Permission).where(
-            Permission.application_id == app.id,
-            Permission.module_key == change.module_key))
-        if known is None:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Unknown module {change.module_key!r} for {app.key}.")
-
         planned.append((change, app, role))
 
-    overreaching: list[tuple[ToolRuleChange, Application, Role, list[str]]] = []
-    for change, app, role in planned:
-        if change.access_level is None:
-            continue
-        # A rule may not promise access the role does not grant.
-        implied = LEVEL_IMPLIES[change.access_level]
-        granted = _role_allows(db, role, app.key, change.module_key)
-        missing = sorted(implied - granted)
-        if missing:
-            overreaching.append((change, app, role, missing))
-
-    if overreaching:
-        for change, app, role, missing in overreaching:
+    # Full Access opens the tool with the role's own actions. A role that
+    # allows nothing in it would be shown Full Access and open nothing.
+    empty = [(change, app, role) for change, app, role in planned
+             if change.access_level == "full"
+             and not _role_allows_any(db, role, app, change.module_key)]
+    if empty:
+        for change, app, role in empty:
             audit(db, actor=actor, action="tool_rule.set", target_type="tool_rule",
                   target_id=f"{app.key}:{change.module_key}:{role.key}",
                   result="blocked", request=request, org_id=actor.org_id,
-                  after={"access_level": change.access_level,
-                         "reason": "would grant what the role denies",
-                         "missing": missing},
+                  after={"access_level": "full",
+                         "reason": "the role allows nothing in this tool"},
                   commit=False)
-        db.commit()          # the refusal rows and nothing else: no change was applied
-        problems = " ".join(
-            f"{role.name} is not granted "
-            f"{', '.join(f'{app.key}:{change.module_key}:{a}' for a in missing)}, "
-            f"so '{change.access_level}' there would do nothing."
-            for change, app, role, missing in overreaching)
+        db.commit()          # the refusal rows and nothing else
+        names = "; ".join(f"{role.name} on {app.name} - {change.module_key}"
+                          for change, app, role in empty)
         raise HTTPException(
             status_code=409,
-            detail=(f"{problems} A tool rule can only take access away, never add "
-                    f"it. Change the role on Roles & Permissions, or pick a "
-                    f"narrower level. Nothing in this set was applied."))
+            detail=(f"Full Access would open nothing: {names}. The role allows "
+                    f"nothing in that tool. Give the role permissions on User & "
+                    f"Role Access first. Nothing in this set was applied."))
 
-    # ---- pass 2: every change passed. Write them all, commit once.
+    # ---- pass 2: write them all, commit once.
     applied, affected_users = [], set()
     for change, app, role in planned:
         existing = db.scalar(select(ToolRule).where(
@@ -236,29 +251,21 @@ def put_tool_rules(body: ToolRulesPut, request: Request,
             if existing is None:
                 continue                  # nothing to clear: nobody's access changes
             db.delete(existing)
-            applied.append({"module": change.module_key, "role": role.key,
-                            "access_level": None})
+        elif existing is None:
+            db.add(ToolRule(org_id=actor.org_id, application_id=app.id,
+                            module_key=change.module_key, role_id=role.id,
+                            access_level=change.access_level, status=RULE_STATUS,
+                            updated_by=actor.id))
         else:
-            if existing is None:
-                db.add(ToolRule(org_id=actor.org_id, application_id=app.id,
-                                module_key=change.module_key, role_id=role.id,
-                                access_level=change.access_level, status=change.status,
-                                updated_by=actor.id))
-            else:
-                existing.access_level = change.access_level
-                existing.status = change.status
-                existing.updated_by = actor.id
-            applied.append({"module": change.module_key, "role": role.key,
-                            "access_level": change.access_level, "status": change.status})
+            existing.access_level = change.access_level
+            existing.updated_by = actor.id
+        applied.append({"application": app.key, "module": change.module_key,
+                        "role": role.key, "access_level": change.access_level})
 
-        # Clearing a rule changes access as surely as setting one — usually it
-        # widens it — so its holders are bumped either way. Under the token
-        # design this version is how a product learns its tool-rule claims are
-        # stale: a clear that did not bump would leave a removed rule enforced
-        # for the token's whole lifetime, with no signal. OPEN-DECISIONS #13.
-        for user_id in db.scalars(select(UserRole.user_id).where(
-                UserRole.role_id == role.id)).all():
-            affected_users.add(user_id)
+        # Clearing a cell changes access as surely as setting one, so its
+        # holders are bumped either way: under the token design this version
+        # is how a product learns its claims are stale. OPEN-DECISIONS #13.
+        affected_users |= _org_people(db, actor.org_id, role.id)
 
     db.flush()
     for user_id in affected_users:
@@ -271,3 +278,40 @@ def put_tool_rules(body: ToolRulesPut, request: Request,
           commit=False)
     db.commit()
     return {"applied": applied, "users_affected": len(affected_users)}
+
+
+@router.put("/tool-status")
+def put_tool_status(body: ToolStatusPut, request: Request,
+                    db: Session = Depends(get_db),
+                    actor: User = Depends(require_global_admin)):
+    """Switch a tool on (active) or off (inactive) for the whole organisation."""
+    app = _tool(db, body.application_key, body.module_key)
+    setting = db.scalar(select(ToolSetting).where(
+        ToolSetting.org_id == actor.org_id, ToolSetting.application_id == app.id,
+        ToolSetting.module_key == body.module_key))
+    before = setting.status if setting else "active"
+    if setting is None:
+        setting = ToolSetting(org_id=actor.org_id, application_id=app.id,
+                              module_key=body.module_key, status=body.status,
+                              updated_by=actor.id)
+        db.add(setting)
+    else:
+        setting.status = body.status
+        setting.updated_by = actor.id
+    db.flush()
+
+    # everyone in the organisation: a switched-off tool is off for every role
+    affected = _org_people(db, actor.org_id) if before != body.status else set()
+    for user_id in affected:
+        bump_permissions_version(db, user_id)
+
+    audit(db, actor=actor, action="tool_status.set", target_type="application",
+          target_id=app.key, application_id=app.id, result="success", request=request,
+          org_id=actor.org_id,
+          before={"module": body.module_key, "status": before},
+          after={"module": body.module_key, "status": body.status,
+                 "users_affected": len(affected)},
+          commit=False)
+    db.commit()
+    return {"application_key": app.key, "module_key": body.module_key,
+            "status": body.status, "users_affected": len(affected)}

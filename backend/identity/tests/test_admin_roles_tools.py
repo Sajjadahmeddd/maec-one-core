@@ -1,4 +1,8 @@
-"""Screens 001 and 002: the role scheme, and the per-organisation overrides.
+"""Screens 001 and 002: the role scheme, and the Tool-Level Settings grid.
+
+Since OPEN-DECISIONS #22 each cell of the grid is Full Access or No Access —
+who may open the tool; what they may do in it is still the role's — and a
+tool's Status can switch it off for the whole organisation.
 
 These are integration tests through the real HTTP stack — the guard, the
 Global Admin dependency and the CSRF check all run, because those are the
@@ -12,10 +16,9 @@ import uuid
 import pytest
 from sqlalchemy import select
 
-from backend.identity import permissions as perms
 from backend.identity.config import CSRF_HEADER
 from backend.identity.models import (
-    Permission, Role, ToolRule, User, UserRole,
+    AuditLog, Permission, Role, ToolRule, ToolSetting, User, UserRole,
 )
 from backend.identity.permissions import can
 
@@ -23,6 +26,7 @@ from conftest import ADMIN_EMAIL, ENGINEER_EMAIL
 
 ROLES = "/api/admin/roles"
 TOOLS = "/api/admin/tool-rules"
+STATUS = "/api/admin/tool-status"
 
 
 def headers(client):
@@ -74,6 +78,8 @@ def test_the_badge_is_derived_not_invented(admin_client):
     assert role_named(body, "employee")["summary"]["engineering:hapaudit"] == "view"
     # Project Management's one module has one action, and every role holds it
     assert role_named(body, "employee")["summary"]["projects:app"] == "full"
+    empty = admin_client.post(ROLES, headers=headers(admin_client), json={"name": "Empty"}).json()
+    assert set(empty["summary"].values()) == {"none"}
 
 
 # ------------------------------------------------------- 001: writing
@@ -168,183 +174,150 @@ def test_an_unknown_permission_key_is_refused(admin_client, db):
     assert r.status_code == 422
 
 
-# --------------------------------------------------- 002: the two rules
-def test_the_api_reports_which_rules_hide_and_which_block(admin_client, db):
-    """The contract a navigation would have to read.
-
-    `hides_from_nav` and `blocks_api` are what make the two levels
-    distinguishable to a consumer. Asserting them here — rather than that a
-    constant contains a string — is the difference between testing the
-    behaviour and testing the spelling.
-
-    Core draws no module navigation, so the reader of this contract is the
-    product's own. Under the token design the product receives the tool
-    rules and applies HIDES_FROM_NAV itself. See OPEN-DECISIONS #3.
-    """
-    employee = db_role(db, "employee")
-    admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [{
-        "application_key": "engineering", "module_key": "hapaudit",
-        "role_id": str(employee.id), "access_level": "hidden"}]})
-
-    cell = admin_client.get(TOOLS).json()["rules"]["engineering:hapaudit"][str(employee.id)]
-    assert cell["access_level"] == "hidden"
-    assert cell["hides_from_nav"] is True
-    assert cell["blocks_api"] is False           # hidden is not a boundary
-
-    admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [{
-        "application_key": "engineering", "module_key": "hapaudit",
-        "role_id": str(employee.id), "access_level": "no_access"}]})
-    cell = admin_client.get(TOOLS).json()["rules"]["engineering:hapaudit"][str(employee.id)]
-    assert cell["hides_from_nav"] is True
-    assert cell["blocks_api"] is True            # no_access is
+# ------------------------------------------- 002: the grid decides
+def _cell(client, tool, role):
+    return client.get(TOOLS).json()["cells"][tool][str(role.id)]
 
 
-def test_hidden_and_no_access_are_stored_and_enforced_differently(db):
-    """The distinction this screen exists to preserve.
-
-    hidden  -> gone from the navigation, API still answers (decluttering)
-    no_access -> API refuses (the boundary)
-    """
-    engineer = db_user(db, ENGINEER_EMAIL)
-    app_id = db.scalar(select(Permission.application_id).where(
-        Permission.key == "engineering:hapext:convert"))
-    employee = db_role(db, "employee")
-
-    rule = ToolRule(org_id=engineer.org_id, application_id=app_id,
-                    module_key="hapext", role_id=employee.id, access_level="hidden")
-    db.add(rule)
-    db.commit()
-    assert can(db, engineer, "engineering:hapext:convert") is True     # still permitted
-    assert "hidden" in perms.HIDES_FROM_NAV                           # but not shown
-
-    rule.access_level = "no_access"
-    db.commit()
-    assert can(db, engineer, "engineering:hapext:convert") is False    # now refused
-    assert "no_access" in perms.HIDES_FROM_NAV
+def _put(client, module, role, level, application="engineering"):
+    return client.put(TOOLS, headers=headers(client), json={"changes": [{
+        "application_key": application, "module_key": module,
+        "role_id": str(role.id), "access_level": level}]})
 
 
-def test_a_view_rule_narrows_to_view_only(db):
-    engineer = db_user(db, ENGINEER_EMAIL)
-    app_id = db.scalar(select(Permission.application_id).where(
-        Permission.key == "engineering:hapext:view"))
-    db.add(ToolRule(org_id=engineer.org_id, application_id=app_id, module_key="hapext",
-                    role_id=db_role(db, "employee").id, access_level="view"))
-    db.commit()
-    assert can(db, engineer, "engineering:hapext:view") is True
-    assert can(db, engineer, "engineering:hapext:convert") is False
-
-
-def test_a_tool_rule_cannot_grant_what_the_role_denies(admin_client, db):
-    """The employee is denied configure on hapext. 'full' implies configure,
-    so the write is refused rather than stored as a rule that does nothing."""
-    employee = db_role(db, "employee")
-    r = admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [{
-        "application_key": "engineering", "module_key": "hapext",
-        "role_id": str(employee.id), "access_level": "full"}]})
-    assert r.status_code == 409
-    assert "can only take access away" in r.json()["detail"]
-    assert db.scalar(select(ToolRule)) is None            # nothing was written
-
-
-def test_a_narrower_level_is_accepted(admin_client, db):
-    employee = db_role(db, "employee")
-    r = admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [{
-        "application_key": "engineering", "module_key": "hapext",
-        "role_id": str(employee.id), "access_level": "view"}]})
-    assert r.status_code == 200, r.text
-    assert r.json()["users_affected"] == 1
-    stored = db.scalar(select(ToolRule))
-    assert stored.access_level == "view" and stored.status == "active"
-
-
-def test_an_edit_rule_is_accepted_and_removes_configuration(admin_client, db):
-    """The administrator's intent, end to end: the write goes through because
-    the role grants everything `edit` implies, and configuration is then gone
-    rather than silently kept."""
-    lead = db_role(db, "business_admin")
+def _engineer_holds(db, role):
+    """The seeded engineer's one grant now names this role."""
     engineer = db_user(db, ENGINEER_EMAIL)
     grant = db.scalar(select(UserRole).where(UserRole.user_id == engineer.id))
-    grant.role_id = lead.id
+    grant.role_id = role.id
     db.commit()
+    return engineer
 
-    r = admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [{
-        "application_key": "engineering", "module_key": "hapext",
-        "role_id": str(lead.id), "access_level": "edit"}]})
-    assert r.status_code == 200, r.text
 
+def test_each_cell_is_reported_as_it_is_enforced(admin_client, db):
+    employee = db_role(db, "employee")
+    # nobody has set it: the role's own permissions, all or nothing
+    assert _cell(admin_client, "engineering:hapext", employee) == {
+        "access_level": "full", "set": False}
+    assert _put(admin_client, "hapext", employee, "no_access").status_code == 200
+    assert _cell(admin_client, "engineering:hapext", employee) == {
+        "access_level": "no_access", "set": True}
+
+
+def test_full_access_on_a_role_that_allows_nothing_is_refused(admin_client, db):
+    """A cell never claims access that does not exist: Full Access for a role
+    with no permissions in the tool would open nothing, so it is refused,
+    audited, and nothing is stored."""
+    it_admin = Role(key="it_admin", name="IT Admin", level=4, is_custom=True,
+                    org_id=db_user(db, ADMIN_EMAIL).org_id)
+    db.add(it_admin)
+    db.commit()
+    r = _put(admin_client, "hapext", it_admin, "full")
+    assert r.status_code == 409
+    assert "would open nothing" in r.json()["detail"]
+    assert "User & Role Access" in r.json()["detail"]
     db.expire_all()
+    assert db.scalar(select(ToolRule)) is None
+    row = db.scalar(select(AuditLog).where(AuditLog.action == "tool_rule.set"))
+    assert (row.result, row.target_id) == ("blocked", "engineering:hapext:it_admin")
+    # No Access on it is fine: it takes away nothing, and says so
+    assert _put(admin_client, "hapext", it_admin, "no_access").status_code == 200
+
+
+def test_no_access_refuses_every_action_of_that_tool(admin_client, db):
+    engineer = db_user(db, ENGINEER_EMAIL)
+    assert _put(admin_client, "hapext", db_role(db, "employee"), "no_access").status_code == 200
+    for action in ("view", "convert", "export", "configure"):
+        assert can(db, engineer, f"engineering:hapext:{action}") is False, action
+    assert can(db, engineer, "engineering:airsizer:convert") is True
+
+
+def test_full_access_leaves_the_role_deciding_inside_the_tool(admin_client, db):
+    """The grid says who may open the tool; the role says what they may do:
+    an engineer with Full Access to HAPExt still may not configure it."""
+    assert _put(admin_client, "hapext", db_role(db, "employee"), "full").status_code == 200
     engineer = db_user(db, ENGINEER_EMAIL)
     assert can(db, engineer, "engineering:hapext:convert") is True
     assert can(db, engineer, "engineering:hapext:configure") is False
 
 
-def test_the_blocked_write_is_audited(admin_client, db):
-    from backend.identity.models import AuditLog
-    employee = db_role(db, "employee")
-    admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [{
-        "application_key": "engineering", "module_key": "hapext",
-        "role_id": str(employee.id), "access_level": "full"}]})
-    rows = db.scalars(select(AuditLog).where(AuditLog.action == "tool_rule.set",
-                                             AuditLog.result == "blocked")).all()
-    assert rows and rows[0].actor_email == ADMIN_EMAIL
+@pytest.mark.parametrize("retired", ["view", "edit", "hidden", "partial"])
+def test_only_full_and_no_access_are_accepted(admin_client, db, retired):
+    r = _put(admin_client, "hapext", db_role(db, "employee"), retired)
+    assert r.status_code == 422
+    assert db.scalar(select(ToolRule)) is None
 
 
-# ------------------------------------------- 002: a rejected set writes nothing
-def test_a_batch_with_a_later_rejection_persists_nothing(admin_client, db):
-    """"Any rejection rejects the whole set", proven with more than one change.
-
-    The first change is valid on its own; the second overreaches. Changes used
-    to be applied as the loop walked them, so auditing the second committed
-    the first and the route still answered 409. Every earlier test sent a
-    single change, which is why the suite could not see it.
-    """
-    from backend.identity.models import AuditLog
+def test_a_set_with_an_unknown_target_persists_nothing(admin_client, db):
+    """"Any rejection rejects the whole set", with more than one change: the
+    first is valid, the second names a module that does not exist."""
     employee = db_role(db, "employee")
     r = admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [
         {"application_key": "engineering", "module_key": "airsizer",
-         "role_id": str(employee.id), "access_level": "view"},       # valid alone
-        {"application_key": "engineering", "module_key": "hapext",
-         "role_id": str(employee.id), "access_level": "full"},       # overreaches
+         "role_id": str(employee.id), "access_level": "no_access"},
+        {"application_key": "engineering", "module_key": "ghost",
+         "role_id": str(employee.id), "access_level": "full"},
     ]})
-    assert r.status_code == 409
-    assert "Nothing in this set was applied" in r.json()["detail"]
-
+    assert r.status_code == 422
     db.expire_all()
-    assert db.scalar(select(ToolRule)) is None                  # the valid change did not land
-    rows = db.scalars(select(AuditLog).where(AuditLog.action == "tool_rule.set")).all()
-    assert [(row.result, row.target_id) for row in rows] == [
-        ("blocked", "engineering:hapext:employee")]             # the refusal, no success
+    assert db.scalar(select(ToolRule)) is None
+    assert not db.scalars(select(AuditLog).where(AuditLog.action == "tool_rule.set")).all()
 
 
-def test_a_rejected_batch_leaves_an_existing_rule_in_place(admin_client, db):
-    """The same for the other kind of write: clearing a rule is a delete, and
-    a rejected set must not perform it. Every rejection in the set is named in
-    one refusal, rather than found one resubmission at a time."""
-    from backend.identity.models import AuditLog
-    employee = db_role(db, "employee")
-    assert admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [
-        {"application_key": "engineering", "module_key": "hapext",
-         "role_id": str(employee.id), "access_level": "view"}]}).status_code == 200
+def test_a_cell_change_is_audited(admin_client, db):
+    _put(admin_client, "hapext", db_role(db, "employee"), "no_access")
+    row = db.scalar(select(AuditLog).where(AuditLog.action == "tool_rule.set"))
+    assert row.result == "success" and row.actor_email == ADMIN_EMAIL
+    assert row.after["changes"] == [{"application": "engineering", "module": "hapext",
+                                     "role": "employee", "access_level": "no_access"}]
 
-    r = admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [
-        {"application_key": "engineering", "module_key": "hapext",
-         "role_id": str(employee.id), "access_level": None},         # clear it
-        {"application_key": "engineering", "module_key": "airsizer",
-         "role_id": str(employee.id), "access_level": "full"},       # overreaches
-        {"application_key": "engineering", "module_key": "rebadge",
-         "role_id": str(employee.id), "access_level": "full"},       # overreaches
-    ]})
-    assert r.status_code == 409
-    detail = r.json()["detail"]
-    assert "engineering:airsizer:configure" in detail
-    assert "engineering:rebadge:configure" in detail
 
+# ------------------------------------------------- 002: the Status column
+def _status(client, module, status, application="engineering"):
+    return client.put(STATUS, headers=headers(client), json={
+        "application_key": application, "module_key": module, "status": status})
+
+
+def test_inactive_switches_a_tool_off_for_everyone(admin_client, db):
+    engineer, admin = db_user(db, ENGINEER_EMAIL), db_user(db, ADMIN_EMAIL)
+    r = _status(admin_client, "hapext", "inactive")
+    assert r.status_code == 200, r.text
+
+    for person in (engineer, admin):        # a Global Admin included
+        assert can(db, person, "engineering:hapext:view") is False
+        assert can(db, person, "engineering:airsizer:view") is True
+    statuses = {m["module_key"]: m["status"] for m in admin_client.get(TOOLS).json()["modules"]}
+    assert statuses["hapext"] == "inactive" and statuses["airsizer"] == "active"
+
+    # even a Full Access cell does not reach through a switched-off tool
+    _put(admin_client, "hapext", db_role(db, "employee"), "full")
+    assert can(db, engineer, "engineering:hapext:view") is False
+
+    assert _status(admin_client, "hapext", "active").status_code == 200
+    assert can(db, engineer, "engineering:hapext:view") is True
+
+
+def test_a_status_change_is_audited_and_bumps_everyone(admin_client, db):
+    before = db_user(db, ENGINEER_EMAIL).permissions_version
+    _status(admin_client, "rebadge", "inactive")
     db.expire_all()
-    kept = db.scalar(select(ToolRule))
-    assert kept is not None and (kept.module_key, kept.access_level) == ("hapext", "view")
-    blocked = db.scalars(select(AuditLog).where(AuditLog.action == "tool_rule.set",
-                                                AuditLog.result == "blocked")).all()
-    assert len(blocked) == 2
+    assert db_user(db, ENGINEER_EMAIL).permissions_version > before
+    row = db.scalar(select(AuditLog).where(AuditLog.action == "tool_status.set"))
+    assert (row.before, row.after["status"]) == ({"module": "rebadge", "status": "active"},
+                                                 "inactive")
+    assert db.scalar(select(ToolSetting)).status == "inactive"
+
+
+@pytest.mark.parametrize("module,status", [("ghost", "inactive"), ("hapext", "paused")])
+def test_a_bad_status_change_is_refused(admin_client, db, module, status):
+    assert _status(admin_client, module, status).status_code == 422
+    assert db.scalar(select(ToolSetting)) is None
+
+
+def test_the_status_is_global_admin_only(engineer_client):
+    r = engineer_client.put(STATUS, headers={CSRF_HEADER: engineer_client.csrf}, json={
+        "application_key": "engineering", "module_key": "hapext", "status": "inactive"})
+    assert r.status_code == 403
 
 
 def test_a_refused_role_edit_does_not_commit_the_rename(db):
@@ -361,6 +334,11 @@ def test_a_refused_role_edit_does_not_commit_the_rename(db):
     custom = Role(key="renamable", name="Renamable", level=4,
                   org_id=engineer.org_id, is_custom=True)
     db.add(custom)
+    # the engineer must not hold what the patch grants: No Access on hapext
+    db.add(ToolRule(org_id=engineer.org_id, module_key="hapext",
+                    application_id=db.scalar(select(Permission.application_id).where(
+                        Permission.key == "engineering:hapext:configure")),
+                    role_id=db_role(db, "employee").id, access_level="no_access"))
     db.commit()
 
     body = RolePatch(name="Renamed", changes=[
@@ -378,7 +356,7 @@ def test_a_rule_can_be_cleared(admin_client, db):
     employee = db_role(db, "employee")
     admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [{
         "application_key": "engineering", "module_key": "hapext",
-        "role_id": str(employee.id), "access_level": "view"}]})
+        "role_id": str(employee.id), "access_level": "no_access"}]})
     r = admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [{
         "application_key": "engineering", "module_key": "hapext",
         "role_id": str(employee.id), "access_level": None}]})
@@ -391,7 +369,7 @@ def test_setting_a_rule_bumps_the_holders(admin_client, db):
     before = engineer.permissions_version
     admin_client.put(TOOLS, headers=headers(admin_client), json={"changes": [{
         "application_key": "engineering", "module_key": "hapext",
-        "role_id": str(db_role(db, "employee").id), "access_level": "view"}]})
+        "role_id": str(db_role(db, "employee").id), "access_level": "no_access"}]})
     db.expire_all()
     assert db_user(db, ENGINEER_EMAIL).permissions_version > before
 
@@ -426,13 +404,13 @@ def test_the_matrix_lists_the_real_modules(admin_client):
     assert [(m["application_key"], m["module_key"]) for m in body["modules"]] == [
         ("engineering", "airsizer"), ("projects", "app"), ("engineering", "hapaudit"),
         ("engineering", "hapext"), ("engineering", "rebadge")]
-    levels = {lvl["key"] for lvl in body["levels"]}
-    assert levels == {"full", "edit", "view", "hidden", "no_access"}
+    assert [lvl["key"] for lvl in body["levels"]] == ["full", "no_access"]
+    assert [s["key"] for s in body["statuses"]] == ["active", "inactive"]
 
 
 @pytest.mark.parametrize("bad", [
-    {"application_key": "nope", "module_key": "hapext", "access_level": "view"},
-    {"application_key": "engineering", "module_key": "ghost", "access_level": "view"},
+    {"application_key": "nope", "module_key": "hapext", "access_level": "no_access"},
+    {"application_key": "engineering", "module_key": "ghost", "access_level": "no_access"},
 ])
 def test_unknown_targets_are_refused(admin_client, db, bad):
     bad = {**bad, "role_id": str(db_role(db, "employee").id)}

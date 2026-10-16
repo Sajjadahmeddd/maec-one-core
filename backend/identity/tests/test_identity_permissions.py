@@ -232,7 +232,19 @@ def test_a_project_scope_overrides_an_application_scope(db):
     assert can(db, engineer, CONVERT, scope=("project", "P-1000")) is False
 
 
+def test_a_tool_nobody_mentions_is_refused(db):
+    """A new module in the registry: no role says anything about it, so nobody
+    may use it until someone is given it."""
+    engineer = user(db, ENGINEER_EMAIL)
+    db.add(Permission(key="engineering:sheet:view", application_id=app(db).id,
+                      module_key="sheet", action="view"))
+    db.commit()
+    assert can(db, engineer, "engineering:sheet:view") is False
+    assert can(db, user(db, ADMIN_EMAIL), "engineering:sheet:view") is False
+
+
 def test_a_permission_nobody_mentions_is_refused(db):
+    """A new action of a tool the engineer holds: no role allows it, so no."""
     engineer = user(db, ENGINEER_EMAIL)
     db.add(Permission(key="engineering:hapext:delete", application_id=app(db).id,
                       module_key="hapext", action="delete"))
@@ -259,85 +271,50 @@ def test_a_no_access_tool_rule_takes_a_module_away(db):
     assert can(db, engineer, "engineering:airsizer:convert") is True   # other modules untouched
 
 
-def test_a_hidden_tool_rule_does_not_block_the_api(db):
-    """`hidden` is navigation only, and that is the point of having both.
+def test_there_are_two_levels_and_one_list_of_them():
+    """The engine, the write path and the database agree: Full or No Access."""
+    from backend.identity import admin_tools, models, resolution
 
-    A team that simply does not use a tool should not see it; a team that
-    must not reach it needs `no_access`. Conflating them either clutters the
-    navigation or ships a boundary that is not one.
-    """
+    assert permissions.LEVELS == resolution.LEVELS == ("full", "no_access")
+    assert admin_tools.ToolRuleChange(application_key="a", module_key="b",
+                                      role_id="00000000-0000-0000-0000-000000000000",
+                                      access_level="full").access_level == "full"
+    check = next(c for c in models.ToolRule.__table__.constraints
+                 if c.name == "ck_tool_rules_access_level")
+    assert str(check.sqltext) == "access_level IN ('full','no_access')"
+
+
+def test_a_full_cell_does_not_grant_what_the_role_denies(db):
+    """The grid says who may open a tool; the role says what they may do in
+    it (OPEN-DECISIONS #22). Full Access on a role that denies every action of
+    a tool opens nothing — the write path refuses to store it — and Full Access
+    on the employee leaves configuration denied."""
     engineer = user(db, ENGINEER_EMAIL)
-    db.add(ToolRule(org_id=engineer.org_id, application_id=app(db).id, module_key="hapext",
-                    role_id=role(db, "employee").id, access_level="hidden"))
+    denier = Role(key="denies_hapext", name="Denies HAPExt", level=4,
+                  org_id=engineer.org_id, is_custom=True)
+    db.add(denier)
+    db.flush()
+    for action in ("view", "convert", "export", "configure"):
+        db.add(RolePermission(role_id=denier.id, effect="deny",
+                              permission_id=permission(db, f"engineering:hapext:{action}").id))
+    grant = db.scalar(select(UserRole).where(UserRole.user_id == engineer.id))
+    grant.role_id = denier.id
     db.commit()
-    assert can(db, engineer, CONVERT) is True
-    assert "hidden" in permissions.HIDES_FROM_NAV       # gone from the nav all the same
-
-
-def test_a_view_only_tool_rule_keeps_view_and_nothing_else(db):
-    engineer = user(db, ENGINEER_EMAIL)
-    db.add(ToolRule(org_id=engineer.org_id, application_id=app(db).id, module_key="hapext",
-                    role_id=role(db, "employee").id, access_level="view"))
-    db.commit()
-    assert can(db, engineer, "engineering:hapext:view") is True
     assert can(db, engineer, CONVERT) is False
 
-
-def test_an_edit_tool_rule_takes_configuration_away(db):
-    """`edit` is everything except configure — and is now enforced as that.
-
-    Before, `_LEVEL_ALLOWS["edit"]` permitted every action while the write
-    path said it omitted configure, so this rule was accepted and changed
-    nothing. The employee role already denies configure, so the engineer
-    leads the application instead: a role that genuinely allows it.
-    """
-    engineer = user(db, ENGINEER_EMAIL)
-    grant = db.scalar(select(UserRole).where(UserRole.user_id == engineer.id))
-    grant.role_id = role(db, "business_admin").id
-    db.commit()
-    assert can(db, engineer, CONFIGURE) is True          # the role allows it
-
     db.add(ToolRule(org_id=engineer.org_id, application_id=app(db).id, module_key="hapext",
-                    role_id=role(db, "business_admin").id, access_level="edit"))
+                    role_id=denier.id, access_level="full"))
     db.commit()
-    for action in ("view", "convert", "export"):
-        assert can(db, engineer, f"engineering:hapext:{action}") is True, action
-    assert can(db, engineer, CONFIGURE) is False         # <- permitted before the fix
-    assert can(db, engineer, "engineering:airsizer:configure") is True   # other modules untouched
+    assert can(db, engineer, CONVERT) is False
+    assert can(db, engineer, CONFIGURE) is False
 
-
-def test_the_two_level_tables_cannot_drift():
-    """Enforcement and the write path read one list of levels, and the two
-    restricting levels permit exactly what they imply — no more.
-
-    Actions beyond today's four are included, so "no more" still holds for
-    an action added to the registry later.
-    """
-    from backend.identity import admin_tools, seed
-
-    assert set(permissions._LEVEL_ALLOWS) == set(permissions.LEVEL_IMPLIES)
-    assert set(admin_tools.LEVELS) == set(permissions.LEVEL_IMPLIES)
-    assert permissions.HIDES_FROM_NAV <= set(permissions.LEVEL_IMPLIES)
-
-    candidates = set(seed.ACTIONS) | {"approve", "delete", "administer"}
-    for level in ("view", "edit"):
-        permitted = {a for a in candidates if permissions._LEVEL_ALLOWS[level](a)}
-        assert permitted == permissions.LEVEL_IMPLIES[level], level
-
-    # the three special levels, stated rather than derived
-    assert all(permissions._LEVEL_ALLOWS["full"](a) for a in candidates)
-    assert all(permissions._LEVEL_ALLOWS["hidden"](a) for a in candidates)
-    assert not any(permissions._LEVEL_ALLOWS["no_access"](a) for a in candidates)
-
-
-def test_a_tool_rule_cannot_grant_what_the_role_denies(db):
-    """`full` on a module does not turn the employee's configure deny into an allow."""
-    engineer = user(db, ENGINEER_EMAIL)
+    grant = db.scalar(select(UserRole).where(UserRole.user_id == engineer.id))
+    grant.role_id = role(db, "employee").id
     db.add(ToolRule(org_id=engineer.org_id, application_id=app(db).id, module_key="hapext",
                     role_id=role(db, "employee").id, access_level="full"))
     db.commit()
+    assert can(db, engineer, CONVERT) is True
     assert can(db, engineer, CONFIGURE) is False
-    assert can(db, engineer, AUDIT_EXPORT) is False
 
 
 def test_a_no_access_rule_on_one_tied_role_refuses_for_both(db):

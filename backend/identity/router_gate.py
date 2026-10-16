@@ -17,6 +17,8 @@ this route requires. They run in a fixed order and stop at the first failure.
     5  no password change is outstanding                    401 password_change
     6  their organisation is active                         403 org_suspended
     7  they hold a seat on the app                          403 no_access
+    8  something in it is theirs to use (Tool-Level         403 no_access
+       Settings: not every tool No Access or Inactive)
 
 Nothing here writes to the browser's cookie: the response goes to the app's
 server, and a Set-Cookie on it would be noise at best.
@@ -24,7 +26,6 @@ server, and a Set-Cookie on it would be noise at best.
 
 from __future__ import annotations
 
-import dataclasses
 import hmac
 import logging
 from datetime import timedelta
@@ -40,7 +41,7 @@ from . import config, security, sessions
 from .db import get_db
 from .models import Application, AuditLog, Permission, User
 from .permissions import audit, entitled, load, load_user, organization_active
-from .resolution import HIDES_FROM_NAV, now, resolve
+from .resolution import now, resolve
 from .router_auth import limiter
 
 router = APIRouter(tags=["gate"])
@@ -161,26 +162,16 @@ def permitted(data, app: Application, db: Session) -> tuple[list[str], list[str]
     """Every permission this person holds in the app, and the modules its
     navigation should leave out — from one load(), resolved in memory.
 
-    `nav_hidden` asks the engine rather than re-deriving its tie-breaks
-    (OPEN-DECISIONS #3, #12): a module is hidden when the roles allow
-    `module:view` but the engine refuses it once every hiding level is read as
-    no_access. That is "a hidden or no_access tool rule sits on a grant that
-    wins module:view", decided by resolve() itself.
+    A tool is all or nothing (OPEN-DECISIONS #22), so `nav_hidden` is simply
+    every module of the app this person cannot use: No Access in the grid,
+    switched off (Inactive), or never granted. It is read from the same
+    resolve() answers as `permissions`, so the two cannot disagree.
     """
     keys = sorted(db.scalars(select(Permission.key).where(
         Permission.application_id == app.id)).all())
     allowed = [key for key in keys if resolve(data, key)]
-
-    no_rules = dataclasses.replace(data, tool_rules={})
-    hiding_blocks = dataclasses.replace(data, tool_rules={
-        target: ("no_access" if level in HIDES_FROM_NAV else level)
-        for target, level in data.tool_rules.items()})
-    modules = sorted({key.split(":")[1] for key in keys})
-    nav_hidden = [
-        module for module in modules
-        if resolve(no_rules, f"{app.key}:{module}:view")
-        and not resolve(hiding_blocks, f"{app.key}:{module}:view")
-    ]
+    usable = {key.split(":")[1] for key in allowed}
+    nav_hidden = sorted({key.split(":")[1] for key in keys} - usable)
     return allowed, nav_hidden
 
 
@@ -243,7 +234,14 @@ def check(request: Request, db: Session = Depends(get_db)):
         _audit_no_access_once_an_hour(db, request, user, app)
         return _refuse(request, 403, "no_access", app_key)
 
+    # 8. Something here they may use. A seat with every tool at No Access, or
+    #    switched off, opens nothing — so the app is refused at the door, as
+    #    for no seat, rather than opened onto an empty navigation.
     allowed, nav_hidden = permitted(load(db, user, app.key), app, db)
+    if not allowed:
+        _audit_no_access_once_an_hour(db, request, user, app)
+        return _refuse(request, 403, "no_access", app_key)
+
     return JSONResponse({
         "user": {"id": str(user.id), "email": user.email, "name": user.display_name},
         "org_id": str(user.org_id),

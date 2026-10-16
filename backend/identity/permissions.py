@@ -29,13 +29,13 @@ from . import security, sessions
 from .db import get_db
 from .models import (
     Application, AuditLog, Organization, Permission, Role, RolePermission,
-    Subscription, ToolRule, User, UserLicense, UserRole,
+    Subscription, ToolRule, ToolSetting, User, UserLicense, UserRole,
 )
 # The resolution moved to resolution.py so a product can import it without a
 # database. Its names have always been importable from here, and still are.
 from .resolution import (  # noqa: F401  (re-exported)
-    HIDES_FROM_NAV, LEVEL_IMPLIES, SPECIFICITY, _LEVEL_ALLOWS, Grant,
-    ResolutionInput, _utc, app_of, fail_closed, now, resolve, split_key,
+    LEVELS, SPECIFICITY, Grant, ResolutionInput, _utc, app_of, fail_closed,
+    now, resolve, split_key,
 )
 
 GLOBAL_ADMIN = "global_admin"
@@ -209,10 +209,19 @@ def load(db: Session, user: User, app_key: str) -> ResolutionInput:
                        ToolRule.role_id.in_(role_ids))).all():
             tool_rules[(module_key, str(role_id))] = level
 
+    # the registry: what "full" covers, and the only keys that can be allowed
+    registered = frozenset(db.scalars(select(Permission.key).where(
+        Permission.application_id == app.id)).all())
+    # tools this organisation has switched off, for everyone
+    inactive_modules = frozenset(db.scalars(select(ToolSetting.module_key).where(
+        ToolSetting.org_id == user.org_id, ToolSetting.application_id == app.id,
+        ToolSetting.status == "inactive")).all())
+
     return ResolutionInput(
         app_key=app_key, org_id=org_id, entitled=True,
         entitled_until=entitled_until, grants=grants,
         role_permissions=role_permissions, tool_rules=tool_rules,
+        registered=registered, inactive_modules=inactive_modules,
     )
 
 

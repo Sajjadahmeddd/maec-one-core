@@ -16,7 +16,7 @@ sight, and `test_resolve_imports_with_no_database_driver` proves it can.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -26,7 +26,7 @@ from typing import Any
 # can quote, so it says which contract each side believes it implements. Bump it
 # only when what resolve(), to_claims() or from_claims() decide or produce
 # changes — never for a comment or a rename.
-RESOLUTION_CONTRACT = "1"
+RESOLUTION_CONTRACT = "2"
 
 log = logging.getLogger("maec.identity")
 
@@ -56,63 +56,19 @@ def fail_closed(where: str, exc: BaseException) -> None:
 # Higher number: more specific. Most specific wins.
 SPECIFICITY = {"platform": 1, "organization": 2, "application": 3, "project": 4}
 
-# What each level implies a role must already allow. The write path in
-# admin_tools refuses a rule that promises more than the role grants.
+# The Tool-Level Settings grid (OPEN-DECISIONS #22): for one role and one
+# module, Full Access or No Access — who may open a tool. What they may do
+# inside it is still the role's: a cell can only take a tool away, never add
+# an action the role does not allow. Two levels, no more:
 #
-# For the two levels that restrict — `edit` and `view` — this is also exactly
-# what they permit at enforcement. `_LEVEL_ALLOWS` below derives from it rather
-# than restating it, because the two tables once disagreed: `edit` omitted
-# configure here and permitted it there, so an administrator who set `edit` to
-# take configuration away got no change and no warning.
-LEVEL_IMPLIES: dict[str, frozenset[str]] = {
-    "full": frozenset({"view", "convert", "export", "configure"}),
-    "edit": frozenset({"view", "convert", "export"}),
-    "view": frozenset({"view"}),
-    "hidden": frozenset(),
-    "no_access": frozenset(),
-}
-
-
-def _permits_only_what_it_implies(level: str) -> Callable[[str], bool]:
-    listed = LEVEL_IMPLIES[level]
-    return lambda action: action in listed
-
-
-# What each tool-rule level still permits. A rule can only ever narrow what
-# the role already allowed — nothing here can turn a denial into a grant,
-# which is structural rather than a check: this runs after the role has
-# already decided, and it can only subtract.
+#   full       the role's own permissions apply, unchanged. The write path
+#              refuses it for a role that allows nothing in the module, so a
+#              cell never claims access that does not exist.
+#   no_access  every action of the module is refused. The boundary.
 #
-# Three levels are special and stay explicit:
-#
-#   full       every action, including one added to the registry later. Not
-#              derived from LEVEL_IMPLIES on purpose: that lists today's four
-#              actions for the write-path check, and a module gaining a fifth
-#              must not have its full-access rules quietly start refusing it.
-#   hidden     the module is not offered in the navigation, but the API still
-#              answers. Decluttering, not a boundary. Anyone who knows the
-#              URL can still call it — which is the point: it is for tools a
-#              team simply does not use, not for tools they must not reach.
-#   no_access  the API refuses. This is the security boundary.
-#
-# `hidden` and `no_access` are NOT the same thing, and collapsing them is the
-# mistake this table exists to prevent. `hidden` permits here and is filtered
-# in the navigation; `no_access` denies.
-_LEVEL_ALLOWS: dict[str, Callable[[str], bool]] = {
-    "full": lambda action: True,
-    "edit": _permits_only_what_it_implies("edit"),
-    "view": _permits_only_what_it_implies("view"),
-    "hidden": lambda action: True,        # UX only — see above
-    "no_access": lambda action: False,    # the boundary
-}
-
-# Levels that take a module out of the navigation, whatever the API does.
-#
-# Core renders no module navigation — its launcher shows applications — so the
-# reader of this is the product's own navigation. Under the token design the
-# product receives the organisation's tool rules for its application and
-# applies this set itself. See OPEN-DECISIONS #3.
-HIDES_FROM_NAV = frozenset({"hidden", "no_access"})
+# A tool the organisation has switched off (Status: Inactive) is refused for
+# everyone, whatever the grid says — see `inactive_modules`.
+LEVELS = ("full", "no_access")
 
 
 def now() -> datetime:
@@ -176,8 +132,14 @@ class ResolutionInput:
     grants: tuple[Grant, ...] = ()
     # (role_id, permission_key) -> "allow" | "deny", for this application only
     role_permissions: Mapping[tuple[str, str], str] = field(default_factory=dict)
-    # (module_key, role_id) -> access level, this organisation, this application
+    # (module_key, role_id) -> "full" | "no_access": the Tool-Level Settings
+    # grid, this organisation, this application
     tool_rules: Mapping[tuple[str, str], str] = field(default_factory=dict)
+    # every permission key the application has: a key outside it is refused
+    registered: frozenset[str] = frozenset()
+    # modules this organisation has switched off (Status: Inactive). Refused
+    # for everyone, whatever their roles or the grid say.
+    inactive_modules: frozenset[str] = frozenset()
 
 
 def covers(grant: Grant, org_id: str, app_key: str,
@@ -224,6 +186,12 @@ def resolve(data: ResolutionInput, permission_key: str,
         if data.entitled_until is not None and _utc(data.entitled_until) < moment:
             return False
 
+        # A registered action, of a tool this organisation has not switched off.
+        if permission_key not in data.registered:
+            return False
+        if module_key in data.inactive_modules:
+            return False
+
         # 2. + 3. roles in force whose scope reaches the request
         requested = scope or ("application", app_key)
         if requested[0] not in SPECIFICITY:
@@ -250,7 +218,7 @@ def resolve(data: ResolutionInput, permission_key: str,
         if not allowing:
             return False
 
-        # 5. tool rules may narrow what the winning roles allowed, never widen
+        # 5. the grid may take the tool away from a winning role, never widen
         #
         # Decided, not incidental: when two roles tie at the top specificity
         # and both allow, a no_access tool rule on EITHER of them refuses.
@@ -273,11 +241,9 @@ def resolve(data: ResolutionInput, permission_key: str,
         # Either is defensible. Only being undecided is not.
         for grant in allowing:
             level = data.tool_rules.get((module_key, grant.role_id))
-            if level is None:
+            if level is None or level == "full":
                 continue
-            allows = _LEVEL_ALLOWS.get(level)
-            if allows is None or not allows(action):
-                return False
+            return False            # no_access, or a level this engine does not know
         return True
     except Exception as exc:
         fail_closed("resolve", exc)
@@ -317,6 +283,8 @@ def to_claims(data: ResolutionInput) -> dict[str, Any]:
             {"module_key": module_key, "role_id": role_id, "access_level": level}
             for (module_key, role_id), level in data.tool_rules.items()
         ],
+        "registered": sorted(data.registered),
+        "inactive_modules": sorted(data.inactive_modules),
     }
 
 
@@ -345,4 +313,8 @@ def from_claims(claims: Mapping[str, Any]) -> ResolutionInput:
             (rule["module_key"], rule["role_id"]): rule["access_level"]
             for rule in claims.get("tool_rules", [])
         },
+        # a token from before contract 2 carries no registry, and is refused
+        # everything rather than read as allowing any key
+        registered=frozenset(claims.get("registered", [])),
+        inactive_modules=frozenset(claims.get("inactive_modules", [])),
     )

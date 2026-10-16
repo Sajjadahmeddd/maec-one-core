@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 import backend.identity as _identity
 from backend.identity.models import (
-    Application, Permission, Role, RolePermission, Subscription, ToolRule,
+    Application, Permission, Role, RolePermission, Subscription, ToolRule, ToolSetting,
     User, UserLicense, UserRole,
 )
 from backend.identity.permissions import can, load
@@ -112,13 +112,16 @@ def project_scoped_deny(db):
                     scope_type="project", scope_id="P-2291"))
 
 
-def every_tool_rule_level(db):
+def every_tool_setting(db):
+    """Both levels, and a switched-off tool, at once."""
     org_id = _user(db, ENGINEER_EMAIL).org_id
     employee = _role(db, "employee").id
-    for module, level in (("hapext", "view"), ("airsizer", "edit"),
-                          ("rebadge", "hidden"), ("hapaudit", "no_access")):
+    for module, level in (("hapext", "full"), ("airsizer", "no_access"),
+                          ("rebadge", "full"), ("hapaudit", "no_access")):
         db.add(ToolRule(org_id=org_id, application_id=_app(db).id,
                         module_key=module, role_id=employee, access_level=level))
+    db.add(ToolSetting(org_id=org_id, application_id=_app(db).id,
+                       module_key="rebadge", status="inactive"))
 
 
 def tied_roles_one_restricted(db):
@@ -131,13 +134,17 @@ def tied_roles_one_restricted(db):
                     module_key="hapext", role_id=lead.id, access_level="no_access"))
 
 
-def edit_on_a_role_that_configures(db):
-    """The derivation from LEVEL_IMPLIES: edit is everything except configure."""
-    grant = _engineer_grant(db)
-    grant.role_id = _role(db, "business_admin").id
+def full_on_a_role_with_nothing(db):
+    """Full Access opens a tool, it grants nothing: a role with no permissions,
+    with a full cell stored behind the write path's back, still opens nothing."""
+    engineer = _user(db, ENGINEER_EMAIL)
+    empty = Role(key="it_admin", name="IT Admin", level=4, org_id=engineer.org_id,
+                 is_custom=True)
+    db.add(empty)
     db.flush()
-    db.add(ToolRule(org_id=_user(db, ENGINEER_EMAIL).org_id, application_id=_app(db).id,
-                    module_key="hapext", role_id=grant.role_id, access_level="edit"))
+    _engineer_grant(db).role_id = empty.id
+    db.add(ToolRule(org_id=engineer.org_id, application_id=_app(db).id,
+                    module_key="hapext", role_id=empty.id, access_level="full"))
 
 
 def expired_grant(db):
@@ -170,8 +177,8 @@ def a_grant_for_another_application(db):
                     scope_type="application", scope_id="timesheet"))
 
 
-SCENARIOS = [seeded, project_scoped_deny, every_tool_rule_level,
-             tied_roles_one_restricted, edit_on_a_role_that_configures,
+SCENARIOS = [seeded, project_scoped_deny, every_tool_setting,
+             tied_roles_one_restricted, full_on_a_role_with_nothing,
              expired_grant, organization_scoped_grant, suspended_organisation,
              no_seat, lapsed_subscription, a_grant_for_another_application]
 
@@ -217,6 +224,7 @@ def _input(**overrides) -> ResolutionInput:
         grants=(Grant(role_id="r1", role_key="employee",
                       scope_type="application", scope_id="engineering"),),
         role_permissions={("r1", CONVERT): "allow"},
+        registered=frozenset({CONVERT}),
     )
     return ResolutionInput(**{**base, **overrides})
 
@@ -273,7 +281,7 @@ def test_a_token_body_for_engineering_carries_nothing_about_another_application(
                           effect="allow"))
     db.add(ToolRule(org_id=engineer.org_id, application_id=timesheet.id,
                     module_key="sheet", role_id=_role(db, "employee").id,
-                    access_level="view"))
+                    access_level="full"))
     db.commit()
 
     claims = to_claims(load(db, engineer, "engineering"))

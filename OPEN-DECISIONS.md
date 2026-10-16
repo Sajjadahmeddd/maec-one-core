@@ -1086,3 +1086,54 @@ is not listed.
 
 **What moves together:** a change to `maec_core_net`'s range changes its
 gateway, `TRUSTED_PROXIES`, and the range noted here.
+
+## 22. Tool-Level Settings: two levels, and who may open a tool — decided
+
+**Status:** decided after the Global Admin GUI rebuild (D1–D3), by the person
+running the platform. Engine contract 2 (`RESOLUTION_CONTRACT`), migration
+`3d7a1c9e4b20`.
+
+**Before:** a tool rule had five levels — `full`, `edit`, `view`, `hidden`,
+`no_access` — and could only narrow what a role allowed. The grid showed
+Partial and View Only, and offered a dropdown of all five.
+
+**Now:**
+
+* **Two levels.** A cell of the grid is Full Access or No Access, for one role
+  and one tool (an application's module), in one organisation.
+* **The grid says who may open a tool; the role says what they may do in it.**
+  No Access refuses every action of the tool for that role. Full Access leaves
+  the role's own permissions to apply unchanged — an engineer with Full Access
+  to HAPExt still may not configure it, because the employee role does not
+  allow that. This was chosen over "the grid decides everything" because
+  Engineering Tools has no roles of its own: it enforces exactly the
+  per-action permissions Core sends through the gate, so making every tool
+  all-or-nothing would have given every engineer and project lead
+  Configure, and every engineer HAPAudit's convert and export. Applications
+  that restrict people by their own roles (Project Management: BU Head, Lead,
+  Engineer) are unaffected either way — Core only decides who may enter.
+* **A cell never claims access that does not exist.** Full Access for a role
+  that allows nothing in the tool would open nothing, so the write is refused
+  (409, audited `blocked`) rather than stored. A cell nobody has set shows Full
+  Access when the role allows anything in the tool, else No Access.
+* **Status: Active or Inactive, per tool, per organisation** (`tool_settings`).
+  Inactive refuses every action of the tool for everyone, Global Admins
+  included, whatever roles and the grid say.
+* **The gate refuses an app with nothing left to open** (step 8, `403
+  no_access`): every tool No Access or Inactive. Without it, No Access on
+  Project Management's single tool would have let people in regardless, since
+  Project Management does not read Core's permission list.
+* **`nav_hidden`** is every module of the app the person can do nothing in.
+* **Existing rules** at migration: `edit`, `view` and `hidden` all left the
+  role able to open the tool, so they became `full`; `no_access` stayed.
+
+**What a product holding the vendored engine must know:** contract 2 adds
+`registered` and `inactive_modules` to the inputs and the claims. A token
+minted before it carries no registry and is refused everything — the safe
+reading. Engineering Tools uses the gate (#19), not tokens, so it follows
+Core immediately.
+
+**Not done, by decision:** creating a new tool or application from the
+screen (an "IT Ticketing" row, or Project Management split into BU Head /
+Lead / User rows). Tools still come only from the seed's registry. When it is
+done, each app must read the new permission from the gate to enforce it.

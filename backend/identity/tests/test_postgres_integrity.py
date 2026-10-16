@@ -538,6 +538,54 @@ def test_the_account_wide_lock_columns_are_gone(session):
     assert not {"failed_login_count", "locked_until"} & columns
 
 
+def test_the_tool_settings_migration_round_trips_with_rows_present(pg):
+    """3d7a1c9e4b20, OPEN-DECISIONS #22: down with a tool switched off, an old
+    'view' rule written under the old constraint, then up again — where the
+    'view' becomes 'full', the retired levels are refused, and the users are
+    all still there."""
+    import pytest
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import inspect as schema
+    from sqlalchemy.exc import IntegrityError
+
+    cfg = Config(str(REPO / "backend" / "identity" / "alembic.ini"))
+    ids = ("(select id from organizations limit 1), "
+           "(select id from applications where key = 'engineering'), ")
+    role = "(select id from roles where key = 'employee' and org_id is null)"
+
+    with pg.session_factory()() as session:
+        session.execute(text(
+            "insert into tool_settings (id, org_id, application_id, module_key, status, updated_at) "
+            f"values (gen_random_uuid(), {ids}'rebadge', 'inactive', now())"))
+        session.commit()
+        users_before = session.scalar(text("select count(*) from users"))
+
+    command.downgrade(cfg, "58d9a22f38be")
+    assert "tool_settings" not in schema(pg.engine()).get_table_names()
+    with pg.session_factory()() as session:
+        session.execute(text(
+            "insert into tool_rules (id, org_id, application_id, module_key, role_id, "
+            "access_level, status, updated_at) values "
+            f"(gen_random_uuid(), {ids}'hapext', {role}, 'view', 'active', now())"))
+        session.commit()
+
+    command.upgrade(cfg, "head")
+    assert "tool_settings" in schema(pg.engine()).get_table_names()
+    with pg.session_factory()() as session:
+        assert session.scalar(text(
+            "select access_level from tool_rules where module_key = 'hapext'")) == "full"
+        assert session.scalar(text("select count(*) from users")) == users_before
+        with pytest.raises(IntegrityError):
+            session.execute(text(
+                "insert into tool_rules (id, org_id, application_id, module_key, role_id, "
+                "access_level, status, updated_at) values "
+                f"(gen_random_uuid(), {ids}'airsizer', {role}, 'hidden', 'active', now())"))
+        session.rollback()
+        session.execute(text("delete from tool_rules"))
+        session.commit()
+
+
 def test_the_oidc_migration_round_trips_with_rows_present(pg):
     """Up, down and up again, with rows in the new tables and the old ones —
     so the downgrade is known to work on a database that has been used, not
@@ -552,7 +600,7 @@ def test_the_oidc_migration_round_trips_with_rows_present(pg):
 
     # the OIDC tables, and every table a later revision added on top of them
     oidc_tables = {"signing_keys", "oauth_clients", "authorization_codes", "sessions",
-                   "login_locks"}
+                   "login_locks", "tool_settings"}
     cfg = Config(str(REPO / "backend" / "identity" / "alembic.ini"))
 
     with pg.session_factory()() as session:

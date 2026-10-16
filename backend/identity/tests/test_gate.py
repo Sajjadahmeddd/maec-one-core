@@ -19,6 +19,7 @@ from sqlalchemy import func, select
 from backend.identity import router_gate
 from backend.identity.config import CSRF_HEADER, SESSION_COOKIE
 from backend.identity.models import (
+    ToolSetting,
     Application, AuditLog, LoginSession, Organization, Permission, Role, ToolRule,
     User, UserLicense,
 )
@@ -150,24 +151,43 @@ def test_the_permissions_are_exactly_what_can_says(gate, db, email):
     assert checked >= 3
 
 
-def test_nav_hidden_follows_the_winning_tool_rule(gate, db):
+def _settle(db, rules=(), inactive=()):
     engineer = _person(db)
     employee = db.scalar(select(Role).where(Role.key == "employee", Role.org_id.is_(None)))
     app_id = db.scalar(select(Application.id).where(Application.key == "engineering"))
-    for module, level in (("hapaudit", "hidden"), ("hapext", "no_access"), ("airsizer", "view")):
+    for module, level in rules:
         db.add(ToolRule(org_id=engineer.org_id, application_id=app_id, module_key=module,
                         role_id=employee.id, access_level=level))
+    for module in inactive:
+        db.add(ToolSetting(org_id=engineer.org_id, application_id=app_id,
+                           module_key=module, status="inactive"))
     db.commit()
 
+
+def test_nav_hidden_is_every_tool_they_cannot_use(gate, db):
+    """No Access in the grid, or switched off: gone from the navigation and
+    from the permissions, together — they are read from the same answers."""
+    _settle(db, rules=(("hapext", "no_access"), ("airsizer", "full")), inactive=("rebadge",))
+
     body = ask(_browser()).json()
-    assert body["nav_hidden"] == ["hapaudit", "hapext"]
-    # hidden is not a boundary: the API still answers for it
-    assert "engineering:hapaudit:view" in body["permissions"]
-    # no_access is: nothing in that module
-    assert not [k for k in body["permissions"] if k.startswith("engineering:hapext:")]
-    # view narrows without hiding
+    assert body["nav_hidden"] == ["hapext", "rebadge"]
+    for module in ("hapext", "rebadge"):
+        assert not [k for k in body["permissions"] if k.startswith(f"engineering:{module}:")]
+    # Full Access, or no cell: the role's own actions, unchanged
     assert [k for k in body["permissions"] if k.startswith("engineering:airsizer:")] == [
+        "engineering:airsizer:convert", "engineering:airsizer:export",
         "engineering:airsizer:view"]
+    assert [k for k in body["permissions"] if k.startswith("engineering:hapaudit:")] == [
+        "engineering:hapaudit:view"]
+
+
+def test_a_seat_with_nothing_left_to_use_is_refused_at_the_door(gate, db):
+    """Step 8: every tool No Access or Inactive opens nothing, so the app is
+    refused as for no seat — and audited the same way, once an hour."""
+    _settle(db, rules=(("hapext", "no_access"), ("airsizer", "no_access"),
+                       ("hapaudit", "no_access")), inactive=("rebadge",))
+    _refused(ask(_browser()), 403, "no_access")
+    assert _rows(db, "gate.no_access") == 1
 
 
 # ----------------------------------------------------------------- 1. bad_app

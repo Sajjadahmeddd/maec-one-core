@@ -74,15 +74,11 @@ def test_the_list_is_paged_and_filtered_in_the_database(admin_client):
     assert all(e["action"].startswith("login.") for e in only["events"])
 
 
-def test_filtering_by_result(admin_client, db):
+def test_filtering_by_result(admin_client, engineer_client, db):
     admin_client.post("/api/admin/roles", headers=headers(admin_client),
                       json={"name": "Blocked Probe"})
-    # a blocked row: a tool rule that would grant what the role denies
-    admin_client.put("/api/admin/tool-rules", headers=headers(admin_client),
-                     json={"changes": [{"application_key": "engineering",
-                                        "module_key": "hapext",
-                                        "role_id": str(db_role(db, "employee").id),
-                                        "access_level": "full"}]})
+    # a blocked row: an engineer asking for a Global Admin route
+    assert engineer_client.get("/api/admin/whoami").status_code == 403
     blocked = admin_client.get(AUDIT, params={"result": "blocked"}).json()
     assert blocked["total"] >= 1
     assert all(e["result"] == "blocked" for e in blocked["events"])
