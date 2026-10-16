@@ -131,6 +131,14 @@ button.module-tile.live:focus-visible { outline: 2px solid var(--gold); outline-
 
 button.module-tile:not(.live) { opacity: .62; }
 
+/* On the launcher, a tile that does not open is not a control: no pointer,
+   no hover. Its face is muted; the line saying why stays at full strength. */
+div.module-tile.closed { cursor: default; }
+
+div.module-tile.closed .module-icon,
+div.module-tile.closed h2,
+div.module-tile.closed p { opacity: .6; }
+
 /* the strip along the bottom of a tile saying whether it can be opened */
 .module-state {
   margin-top: auto; padding-top: 9px;
@@ -388,3 +396,44 @@ div.module-tile:not(.built) { opacity: .72; }
 .signin-footer a { color: var(--gold-deep); font-weight: 600; text-decoration: none; }
 
 .signin-footer a:hover { text-decoration: underline; }
+
+/* ---- narrow screens: one column, the panel first ----
+   Below this width the two columns stop fitting side by side. The panel —
+   the sign-in form, or the launcher's name, Admin panel card and menu —
+   comes first, the tiles after it, two to a row; and the page scrolls as a
+   whole, so the footer follows the content instead of taking a phone's
+   screen for itself. */
+@media (max-width: 960px) {
+  .signin { height: auto; min-height: 100%; overflow: visible; }
+
+  .signin-body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 26px; padding: 20px 16px 24px;
+    overflow: visible; align-items: start;
+  }
+
+  .signin-panel { order: -1; }
+
+  .signin-pitch { max-width: none; }
+
+  .module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+
+  .capability-strip { flex-wrap: wrap; justify-content: flex-start; row-gap: 10px; }
+
+  .signin-footer { padding: 14px 16px; }
+}
+
+@media (max-width: 480px) {
+  .signin-card { padding: 20px 18px 18px; border-radius: 16px; }
+
+  .maec-lockup img, .maec-one { width: 180px; }
+
+  .signin-headline { font-size: 28px; }
+
+  .module-tile { padding: 14px 13px 13px; }
+
+  /* the strip's dividers only make sense on one line */
+  .capability-strip li + li { border-left: none; padding-left: 0; }
+
+  .signin-footer { flex-direction: column; align-items: flex-start; gap: 8px; }
+}

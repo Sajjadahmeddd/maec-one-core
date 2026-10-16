@@ -5,7 +5,8 @@
 // Global Admin panel. There is no page state machine and no product tabs;
 // those belong to Engineering Tools, which is a separate deployment.
 //
-// Where you land after signing in is decided by the server. Every route
+// Signing in lands on the launcher — for everyone, a Global Admin included —
+// unless a `next` that safeNext() follows sent them here. Every route
 // below is a convenience — the API refuses what this person may not do
 // regardless of what the browser renders.
 
@@ -17,11 +18,7 @@ import Launcher from './maecone/Launcher.jsx'
 import Login from './maecone/Login.jsx'
 import AdminShell from './maecone/admin/AdminShell.jsx'
 import { SESSION_EXPIRED, auth as authApi } from './maecone/api'
-import { INTERNAL } from './maecone/MaecOne.jsx'
-import { CHANGE_PASSWORD, backFrom, safeNext, signInFirst } from './maecone/next.js'
-
-/** A Global Admin lands in the panel; everyone else on the launcher. */
-const homeFor = (session) => (session?.is_global_admin ? '/admin' : '/')
+import { CHANGE_PASSWORD, HOME, backFrom, landing, safeNext, signInFirst } from './maecone/next.js'
 
 /** Is this `next`, as safeNext() returned it, that page? */
 const isChangePage = (target) => target?.split('?')[0] === CHANGE_PASSWORD
@@ -86,12 +83,13 @@ export default function App() {
     }
   }, [session, pathname, navigate])
 
-  /** After sign-in or a password change: back where they were, or — when the
-   *  `next` they came with was refused — the launcher, or else home. */
+  /** After sign-in or a password change: back where they were, when the
+   *  `next` they came with is followed — the effect above takes them — and
+   *  otherwise the launcher, whatever their role. */
   const land = (who) => {
     setSession(who)
-    if (asked && safeNext(asked, who.apps, window.location.origin)) return
-    navigate(asked ? '/' : homeFor(who), { replace: true })
+    if (landing(asked, who.apps, window.location.origin) !== HOME) return
+    navigate(HOME, { replace: true })
   }
 
   /** After the required change. Someone who came for /change-password has just
@@ -100,7 +98,7 @@ export default function App() {
     if (asked && isChangePage(safeNext(asked, who.apps, window.location.origin))) {
       setAsked(null)
       setSession(who)
-      navigate('/', { replace: true })
+      navigate(HOME, { replace: true })
       return
     }
     land(who)
@@ -109,7 +107,7 @@ export default function App() {
   /** After a voluntary change: the launcher, saying so. */
   const changedVoluntarily = (who) => {
     setSession(who)
-    navigate('/', { replace: true })
+    navigate(HOME, { replace: true })
     setNotice('Password changed')
   }
 
@@ -166,17 +164,13 @@ export default function App() {
 
   return (
     <Routes>
-      {/* The launcher is Core's home: the products this person may open. */}
-      <Route path="/" element={
+      {/* The launcher is Core's home, for everyone: every application, and
+          what this person can do with each. Core hosts none of them; a tile
+          opens its base_url (launcher.js). */}
+      <Route path={HOME} element={
         <Launcher
           session={session}
           notice={notice}
-          onOpen={(app) => {
-            // Core does not host any product. A tile opens by URL, from
-            // applications.base_url — which is empty until each service is
-            // deployed and its row updated. See EXTRACTION-LOG.md.
-            if (app?.base_url) window.location.assign(app.base_url)
-          }}
           onAdmin={() => navigate('/admin')}
           onChangePassword={() => navigate(CHANGE_PASSWORD)}
           onSignOut={signOut}
@@ -194,21 +188,17 @@ export default function App() {
         />
       } />
 
-      {/* Convenience only: require_global_admin refuses /api/admin/* to
-          anyone else, so a non-admin who types this gets an empty shell and
-          403s from every call it makes. */}
+      {/* Global Admins only, from the launcher's card or by its address.
+          Convenience only: require_global_admin refuses /api/admin/* to
+          anyone else, whatever this renders. */}
       <Route path="/admin/*" element={
         session.is_global_admin
           ? <AdminShell session={session} onSignOut={signOut} />
-          : <Navigate to="/" replace />
+          : <Navigate to={HOME} replace />
       } />
 
-      {/* A refused `next` lands on the launcher, wherever it arrived. */}
-      <Route path="*" element={<Navigate to={asked ? '/' : homeFor(session)} replace />} />
+      {/* Anything else, a refused `next` included, is the launcher. */}
+      <Route path="*" element={<Navigate to={HOME} replace />} />
     </Routes>
   )
 }
-
-// Re-exported so a future product link can ask which application this
-// deployment is. Core is not a product, so it is none of them.
-export { INTERNAL }

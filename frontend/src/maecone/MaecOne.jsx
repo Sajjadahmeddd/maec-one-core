@@ -6,6 +6,8 @@
 // drifting apart, since between them the only thing that changes is the
 // right-hand panel and whether the tiles do anything when clicked.
 
+import { tileState } from './launcher.js'
+
 export const Svg = (props) => (
   <svg
     viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"
@@ -82,21 +84,6 @@ export const PRESENTATION = {
   kpa: { icon: 'kpa', tone: 'blue' },
 }
 
-// The product this deployment actually is: picking it opens in place rather
-// than navigating away.
-export const INTERNAL = 'engineering'
-
-/**
- * Can this person open this product right now? Three things must hold: the
- * service exists, they hold a seat, and there is somewhere to send them.
- * The server decides the middle one. A `true` here only shows a tile — the
- * API refuses the same request independently.
- */
-export const isOpenable = (app) => (
-  !!app && app.status === 'live' && !!app.entitled
-  && (app.key === INTERNAL || !!app.base_url)
-)
-
 const look = (key) => PRESENTATION[key] || { icon: 'tools', tone: 'blue' }
 
 const CAPABILITIES = [
@@ -117,13 +104,15 @@ export const BADGES = [
 
 /**
  * @param panel  the right-hand column: the sign-in card, or the welcome panel
- * @param apps   the catalogue from GET /api/auth/me. Before sign-in it comes
- *               without an `entitled` field, so nothing is openable — which
- *               is right: nothing should look clickable before you are known.
- * @param onPick called with an app when an openable tile is clicked. Omit it
- *               and the tiles are presentational.
+ * @param apps    the catalogue from GET /api/auth/me. Before sign-in it comes
+ *                without an `entitled` field, so nothing is openable — which
+ *                is right: nothing should look clickable before you are known.
+ * @param session the /api/auth/me payload, on the launcher: each tile's state
+ *                is tileState(app, session) — open, or the reason it is not.
+ * @param onPick  called with an app when a tile that opens is clicked. Omit
+ *                it and the tiles are presentational.
  */
-export default function MaecOne({ panel, apps = [], onPick }) {
+export default function MaecOne({ panel, apps = [], session, onPick }) {
   return (
     <div className="signin">
       <div className="signin-body">
@@ -148,7 +137,9 @@ export default function MaecOne({ panel, apps = [], onPick }) {
               const { icon, tone } = look(key)
               const Icon = ICONS[icon]
               const built = app.status === 'live'
-              const live = !!onPick && isOpenable(app)
+              // On the launcher: open, or the reason it is not. Before sign-in
+              // there is no session, and the tiles only say what exists.
+              const state = onPick ? tileState(app, session) : null
               // One face for both screens — including the state line, which is
               // why the two columns are the same height rather than merely
               // close. Only the wording changes with what you can do here.
@@ -158,30 +149,22 @@ export default function MaecOne({ panel, apps = [], onPick }) {
                   <h2>{name}</h2>
                   <p>{description}</p>
                   <span className="module-state">
-                    {live
-                      ? <>Open <ICONS.arrow width="13" height="13" /></>
-                      : built
-                        ? (onPick && !app.entitled ? 'No access' : 'Available')
-                        : 'Coming soon'}
+                    {state
+                      ? (state.open ? <>Open <ICONS.arrow width="13" height="13" /></> : state.reason)
+                      : (built ? 'Available' : 'Coming soon')}
                   </span>
                 </>
               )
               return (
                 <li key={key}>
-                  {onPick ? (
-                    <button
-                      type="button"
-                      className={`module-tile${live ? ' live' : ''}`}
-                      disabled={!live}
-                      title={
-                        live ? `Open ${name}`
-                          : built ? `You do not have access to ${name}`
-                            : `${name} is not built yet`
-                      }
-                      onClick={() => onPick(app)}
-                    >
+                  {state?.open ? (
+                    <button type="button" className="module-tile live"
+                            title={`Open ${name}`} onClick={() => onPick(app)}>
                       {face}
                     </button>
+                  ) : state ? (
+                    // not a control: it says why, rather than ignoring a click
+                    <div className="module-tile closed" data-reason={state.reason}>{face}</div>
                   ) : (
                     <div className={`module-tile${built ? ' built' : ''}`}>{face}</div>
                   )}

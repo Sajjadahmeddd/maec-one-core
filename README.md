@@ -192,15 +192,17 @@ and signs out the sessions minted under the old password. Then unset it.
 .venv/Scripts/python -m pytest
 ```
 
-586 tests. 564 run against an in-memory SQLite; 21 run against the PostgreSQL
+594 tests. 571 run against an in-memory SQLite; 21 run against the PostgreSQL
 in your `.env` and cover what SQLite cannot — column widths, CHECK
 constraints, the append-only trigger, the migrations run up and down with data
 present, real concurrency on single-use authorization codes, and a session
 revoked on one connection being refused on another at once. Those 21 skip
 themselves if no PostgreSQL is configured — a green run with them skipped has
-not tested any of that. One more runs the sign-in page's `next` allowlist —
-the open-redirect surface — under Node (`node --test
-frontend/src/maecone/next.test.js`), so Node must be installed.
+not tested any of that. Two more run frontend rules under Node, so Node must
+be installed: the sign-in page's `next` allowlist — the open-redirect surface
+— (`node --test frontend/src/maecone/next.test.js`), and where sign-in lands,
+what each launcher tile does and who sees the Admin panel card
+(`frontend/src/maecone/launcher.test.js`).
 
 ## The gate — how an app lets people in
 
@@ -254,11 +256,29 @@ the launcher. Someone not signed in signs in first and comes back to it.
 
 ## The launcher
 
-The launcher shows a tile per product and opens it at `applications.base_url`,
-so **each product's address has to be set on its row** before a tile does
-anything (`EXTRACTION-LOG.md`, finding 6d). With the shared cookie and the
-gate (#19) there is no handoff: the tile opens the product, and the gate lets
-the person straight in.
+Everyone lands on the launcher — a Global Admin too — after signing in, and
+whenever they open Core while signed in. The one exception is a `next` the
+sign-in page follows: an app's own address, `/change-password` or
+`/oauth/authorize`. A Global Admin reaches the Admin panel from a card on the
+launcher, or at `/admin`; nobody else is offered it.
+
+There is a tile for every row in `applications`, from `GET /api/auth/me`
+(`apps`: key, name, status, base_url, and `entitled` — a seat, under an
+in-date subscription, in an active organisation: what the gate checks). One
+query reads the catalogue, however many applications there are. A tile opens
+its `base_url`, in the same tab, when the app is `live`, the person is
+entitled, and the address is set. Otherwise it says why, and is not a control;
+the first that applies wins:
+
+1. Organisation suspended
+2. Coming soon
+3. No access – ask your administrator
+4. Not available yet
+
+So **each product's address has to be set on its row** before its tile opens
+(`EXTRACTION-LOG.md`, finding 6d). With the shared cookie and the gate (#19)
+there is no handoff: the tile opens the product, and the gate lets the person
+straight in.
 
 ## Reading
 

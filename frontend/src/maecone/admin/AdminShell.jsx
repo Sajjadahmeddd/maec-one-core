@@ -16,17 +16,16 @@ import OnboardingScreen from './OnboardingScreen.jsx'
 import ProvisioningScreen from './ProvisioningScreen.jsx'
 import RolesScreen from './RolesScreen.jsx'
 import UsersScreen from './UsersScreen.jsx'
-import { CHANGE_PASSWORD } from '../next.js'
+import { CHANGE_PASSWORD, HOME } from '../next.js'
 import ToolsScreen from './ToolsScreen.jsx'
 
-// The other products, as top-level pills. Only Global Admin is built; the
-// rest are named so the shell reads as part of one platform rather than a
-// tool on its own, and they light up as those services arrive.
+// The top-level pills: back to the launcher, which lists every application
+// and opens each at its own address, and this panel. The applications are
+// not repeated here — a hard-coded list of them is how the old "Engineering
+// Tools" pill came to point at /hapext, a page Core does not serve.
 const SECTIONS = [
-  { key: 'admin', label: 'Global Admin', to: '/admin', ready: true },
-  { key: 'engineering', label: 'Engineering Tools', to: '/hapext', ready: true },
-  { key: 'projects', label: 'Project Management', to: null, ready: false },
-  { key: 'finance', label: 'Finance & HR', to: null, ready: false },
+  { key: 'launcher', label: 'Launcher', to: HOME, ready: true },
+  { key: 'admin', label: 'Admin panel', to: '/admin', ready: true },
 ]
 
 const TABS = [
@@ -77,8 +76,8 @@ export default function AdminShell({ session, onSignOut }) {
   return (
     <div className="maec-admin">
       <header className="maec-admin-header">
-        <button className="maec-wordmark" onClick={() => navigate('/home')}
-                title="Back to MAEC One">
+        <button className="maec-wordmark" onClick={() => navigate(HOME)}
+                title="Back to the launcher">
           <img src="/maec-logo.png" alt="MAEC" />
           <span>ONE</span>
         </button>

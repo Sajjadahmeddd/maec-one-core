@@ -77,6 +77,18 @@ export function safeNext(raw, apps, here) {
   return allowed.has(url.origin) ? url.href : null
 }
 
+/** The launcher: where everyone lands, whatever their role. */
+export const HOME = '/'
+
+/**
+ * Where sign-in lands: the `next` it came with, when safeNext() follows it,
+ * and otherwise the launcher — for every role, a Global Admin included. The
+ * Admin panel is a card on the launcher, never a landing.
+ */
+export function landing(raw, apps, here) {
+  return safeNext(raw, apps, here) || HOME
+}
+
 /**
  * Where the change-password form's Back goes: the Admin screen it was opened
  * from — router state, set by AdminShell — or else the launcher. Only an
