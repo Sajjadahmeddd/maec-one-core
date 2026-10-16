@@ -88,7 +88,7 @@ export default function UsersScreen() {
       <div className="maec-card">
         <div className="maec-head">
           <div>
-            <h1 className="maec-h1">Users &amp; Access</h1>
+            <h1 className="maec-h1">Users</h1>
             <p className="maec-lede">
               Create users, assign roles and application seats, manage account status.
             </p>

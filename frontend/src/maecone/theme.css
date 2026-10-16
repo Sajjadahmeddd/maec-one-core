@@ -7,47 +7,63 @@
    needed that is not here, it belongs here first. */
 
 :root {
+  /* The values below are sampled from the four designs in
+     frontend/Global admin GUI/ (v1.0-v1.2). */
+
+  /* ---- type: the designs are set in a plain sans-serif. Nothing here is
+     fetched from a font service; the first one installed is used. */
+  --maec-font: Inter, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
   /* ---- ground and paper */
-  --maec-page: #F5F7FA;          /* very light blue-grey */
+  --maec-page: #F6F7FA;          /* very light blue-grey */
   --maec-card: #FFFFFF;
   --maec-header: #FFFFFF;
-  --maec-border: #E3E8EF;        /* the 1px on every card */
-  --maec-border-strong: #CDD5E0;
-  --maec-shadow: 0 1px 2px rgba(20, 27, 77, .05);
+  --maec-border: #E4E7EC;        /* the 1px on every card */
+  --maec-border-strong: #D3D8E0;
+  --maec-shadow: none;
 
   /* ---- ink */
-  --maec-ink: #1B2333;
-  --maec-ink-soft: #5A6478;
-  --maec-ink-faint: #8A93A6;
+  --maec-ink: #1F2430;
+  --maec-ink-soft: #4F5868;
+  --maec-ink-faint: #7C8597;
 
   /* ---- brand */
-  --maec-navy: #141B4D;          /* primary buttons, active toggles */
+  --maec-navy: #141B4D;          /* active toggles */
   --maec-navy-hover: #1E2A6B;
+  /* the designs' primary button and active tab: a mid grey, dark ink */
+  --maec-primary: #BDBDBD;
+  --maec-primary-hover: #ADADAD;
+  --maec-primary-ink: #1F2430;
+  --maec-notice-bar: #3B82F6;
   --maec-gold: #C9A227;          /* the wordmark accent */
   --maec-focus: #1E5EDB;
 
   /* ---- state, used as fill + ink pairs.
          Full/granted, partial/scoped, denied, needs review, inactive. */
-  --maec-granted-fill: #E6F4EA;
-  --maec-granted-ink: #1D6B33;
-  --maec-scoped-fill: #E7F0FD;
-  --maec-scoped-ink: #17458F;
-  --maec-denied-fill: #FDECEC;
-  --maec-denied-ink: #A32222;
-  --maec-warn-fill: #FDF3DC;
+  --maec-granted-fill: #DDF4E4;
+  --maec-granted-ink: #23784A;
+  --maec-scoped-fill: #E5EEFC;
+  --maec-scoped-ink: #24508F;
+  --maec-denied-fill: #FDE6E6;
+  --maec-denied-ink: #C0383B;
+  --maec-warn-fill: #FCEFC2;
   --maec-warn-ink: #7A5B12;
-  --maec-inactive-fill: #F0F2F5;
-  --maec-inactive-ink: #77808F;
+  --maec-inactive-fill: #ECEFF3;
+  --maec-inactive-ink: #5F6878;
+  --maec-rose-fill: #FCE9EA;     /* In-Active */
+  --maec-rose-ink: #A4515A;
 
   /* ---- controls */
   --maec-pill-active: #ECEEF2;
   --maec-toggle-off: #D5DAE2;
-  --maec-row-header: #F4F6F9;
-  --maec-row-line: #EDF0F4;
+  --maec-row-header: #EDF1F5;    /* the table's header band */
+  --maec-row-line: #E9ECF0;
+  --maec-panel: #F6F7F9;         /* the guidelines box, the controls strip */
+  --maec-avatar: #E4E7EE;
 
   /* ---- metrics */
   --maec-radius: 10px;
-  --maec-radius-sm: 7px;
+  --maec-radius-sm: 6px;
   --maec-pad: 22px;
   --maec-gap: 16px;
   --maec-row-height: 46px;
@@ -58,18 +74,20 @@
   min-height: 100%;
   background: var(--maec-page);
   color: var(--maec-ink);
+  font-family: var(--maec-font);
   display: flex;
   flex-direction: column;
 }
+.maec-admin button, .maec-admin input, .maec-admin select { font-family: inherit; }
 
 .maec-admin-header {
   background: var(--maec-header);
   border-bottom: 1px solid var(--maec-border);
   display: flex;
   align-items: center;
-  gap: 26px;
-  padding: 0 26px;
-  height: 62px;
+  gap: 18px;
+  padding: 0 16px;
+  height: 52px;
   flex: none;
 }
 
@@ -83,12 +101,13 @@
   cursor: pointer;
   font: inherit;
 }
-.maec-wordmark img { height: 21px; display: block; }
-.maec-wordmark span {
-  color: var(--maec-gold);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: .16em;
+.maec-wordmark img { height: 17px; display: block; }
+/* "v1.0", set low beside the wordmark as the designs have it */
+.maec-version {
+  align-self: flex-end;
+  margin-bottom: -6px;
+  color: var(--maec-ink-soft);
+  font-size: 10px;
 }
 .maec-wordmark:focus-visible { outline: 2px solid var(--maec-focus); outline-offset: 3px; }
 
@@ -112,48 +131,68 @@
 
 .maec-spacer { flex: 1; }
 
-.maec-who { display: flex; align-items: center; gap: 11px; }
-.maec-who-email { font-size: 13px; color: var(--maec-ink-soft); }
+/* the account menu: address and avatar, as the designs show them; the
+   launcher, change password and sign out are in the menu it opens */
+.maec-who { position: relative; }
+.maec-who-button {
+  display: flex; align-items: center; gap: 10px;
+  background: none; border: none; padding: 4px; border-radius: 999px;
+  cursor: pointer; color: var(--maec-ink);
+}
+.maec-who-button:hover .maec-avatar { background: var(--maec-border-strong); }
+.maec-who-button:focus-visible { outline: 2px solid var(--maec-focus); outline-offset: 2px; }
+.maec-who-email { font-size: 12px; color: var(--maec-ink); }
 .maec-avatar {
-  width: 33px;
-  height: 33px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
-  background: var(--maec-navy);
-  color: var(--maec-card);
+  background: var(--maec-avatar);
+  color: var(--maec-ink);
   display: grid;
   place-items: center;
   font-size: 12px;
-  font-weight: 700;
-  letter-spacing: .02em;
+  font-weight: 600;
 }
+.maec-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20;
+  min-width: 190px; margin: 0; padding: 6px; list-style: none;
+  background: var(--maec-card); border: 1px solid var(--maec-border);
+  border-radius: var(--maec-radius-sm);
+  box-shadow: 0 10px 28px -12px rgba(20, 27, 77, .28);
+}
+.maec-menu button {
+  width: 100%; text-align: left; background: none; border: none;
+  padding: 8px 10px; border-radius: 4px; cursor: pointer;
+  font-size: 13px; color: var(--maec-ink);
+}
+.maec-menu button:hover, .maec-menu button:focus-visible { background: var(--maec-row-header); outline: none; }
 
 /* ------------------------------------------------------------ tab strip */
 .maec-tabs {
   background: var(--maec-header);
-  border-bottom: 1px solid var(--maec-border);
+  border: 1px solid var(--maec-border);
+  border-radius: var(--maec-radius-sm);
   display: flex;
-  gap: 4px;
-  padding: 0 26px;
-  flex: none;
+  gap: 6px;
+  padding: 5px;
+  margin-bottom: 16px;
+  overflow-x: auto;          /* a phone scrolls the tabs, not the page */
 }
 .maec-tab {
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  padding: 13px 15px;
-  margin-bottom: -1px;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--maec-ink-soft);
-  cursor: pointer;
+  flex: none;
+  border-radius: 4px;
+  padding: 7px 14px;
+  font-size: 12px;
+  color: var(--maec-ink);
+  text-decoration: none;
+  white-space: nowrap;
 }
-.maec-tab:hover { color: var(--maec-ink); }
-.maec-tab.active { color: var(--maec-navy); border-bottom-color: var(--maec-navy); }
-.maec-tab:focus-visible { outline: 2px solid var(--maec-focus); outline-offset: -2px; }
+.maec-tab:hover { background: var(--maec-row-header); }
+.maec-tab.active { background: var(--maec-primary); color: var(--maec-primary-ink); }
+.maec-tab:focus-visible { outline: 2px solid var(--maec-focus); outline-offset: 1px; }
 
 /* ----------------------------------------------------------- the canvas */
-.maec-body { padding: 26px; flex: 1; }
+.maec-body { padding: 20px 32px 32px; flex: 1; min-width: 0; }
 
 .maec-card {
   background: var(--maec-card);
@@ -163,8 +202,8 @@
   box-shadow: var(--maec-shadow);
 }
 
-.maec-h1 { font-size: 20px; font-weight: 700; margin: 0 0 5px; }
-.maec-lede { color: var(--maec-ink-soft); font-size: 13px; margin: 0; }
+.maec-h1 { font-size: 17px; font-weight: 500; margin: 0 0 6px; }
+.maec-lede { color: var(--maec-ink); font-size: 12px; margin: 0; }
 
 .maec-placeholder { display: grid; gap: 7px; min-height: 220px; align-content: start; }
 .maec-soon {
@@ -184,48 +223,58 @@
   align-items: center;
   border-radius: 999px;
   padding: 3px 11px;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 .maec-chip.granted  { background: var(--maec-granted-fill);  color: var(--maec-granted-ink); }
 .maec-chip.scoped   { background: var(--maec-scoped-fill);   color: var(--maec-scoped-ink); }
 .maec-chip.denied   { background: var(--maec-denied-fill);   color: var(--maec-denied-ink); }
 .maec-chip.warn     { background: var(--maec-warn-fill);     color: var(--maec-warn-ink); }
 .maec-chip.inactive { background: var(--maec-inactive-fill); color: var(--maec-inactive-ink); }
+.maec-chip.neutral  { background: var(--maec-inactive-fill); color: var(--maec-inactive-ink); }
+.maec-chip.rose     { background: var(--maec-rose-fill);     color: var(--maec-rose-ink); }
+/* a schema column name: a small square tag */
+.maec-chip.tag { border-radius: 3px; padding: 3px 9px; background: var(--maec-row-header); color: var(--maec-ink); }
 
 /* --------------------------------------------- buttons, for Prompt 2 */
 .maec-btn {
-  border-radius: var(--maec-radius-sm);
-  padding: 9px 17px;
+  border-radius: 4px;
+  padding: 8px 18px;
   font: inherit;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
   border: 1px solid transparent;
 }
-.maec-btn.primary { background: var(--maec-navy); color: var(--maec-card); }
-.maec-btn.primary:hover { background: var(--maec-navy-hover); }
+.maec-btn:disabled { opacity: .55; cursor: not-allowed; }
+.maec-btn.primary { background: var(--maec-primary); color: var(--maec-primary-ink); }
+.maec-btn.primary:hover:not(:disabled) { background: var(--maec-primary-hover); }
 .maec-btn.secondary {
   background: var(--maec-card);
   color: var(--maec-ink);
   border-color: var(--maec-border-strong);
 }
-.maec-btn.secondary:hover { background: var(--maec-row-header); }
+.maec-btn.secondary:hover:not(:disabled) { background: var(--maec-row-header); }
 .maec-btn:focus-visible { outline: 2px solid var(--maec-focus); outline-offset: 2px; }
 
 /* ----------------------------------------------- tables, for Prompt 2 */
-.maec-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.maec-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; }
 .maec-table thead th {
   background: var(--maec-row-header);
   color: var(--maec-ink-soft);
   text-align: left;
-  font-weight: 600;
-  padding: 11px 14px;
-  border-bottom: 1px solid var(--maec-border);
+  font-size: 10.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  padding: 11px 20px;
   white-space: nowrap;
 }
+.maec-table thead th:first-child { border-radius: 6px 0 0 6px; }
+.maec-table thead th:last-child { border-radius: 0 6px 6px 0; }
 .maec-table tbody td {
-  padding: 0 14px;
+  padding: 8px 20px;
   height: var(--maec-row-height);
   border-bottom: 1px solid var(--maec-row-line);
 }
@@ -278,16 +327,20 @@
 .maec-h2 { font-size: 15px; font-weight: 700; margin: 0 0 5px; }
 .maec-sub { color: var(--maec-ink-faint); font-size: 12px; margin-top: 2px; }
 
-.maec-toolbar { display: flex; gap: 10px; margin-bottom: 16px; }
+.maec-toolbar { display: flex; gap: 10px; margin-bottom: 14px; align-items: center; flex-wrap: wrap; }
+/* the designs: search on the left, the screen's one action on the right */
+.maec-toolbar.split { justify-content: space-between; }
+.maec-toolbar.split .maec-search { flex: 0 1 236px; }
+.maec-toolbar.split .maec-btn { flex: 0 0 auto; min-width: 176px; }
 
 .maec-search {
   flex: 1;
   min-width: 0;
   font: inherit;
-  font-size: 13px;
-  padding: 9px 13px;
+  font-size: 12px;
+  padding: 8px 12px;
   border: 1px solid var(--maec-border-strong);
-  border-radius: var(--maec-radius-sm);
+  border-radius: 4px;
   background: var(--maec-card);
   color: var(--maec-ink);
 }
@@ -411,19 +464,20 @@
 }
 .maec-stat {
   display: grid;
-  gap: 3px;
-  padding: 14px 16px;
-  background: var(--maec-row-header);
+  gap: 5px;
+  align-content: start;
+  padding: 13px 13px 16px;
+  background: var(--maec-panel);
   border: 1px solid var(--maec-border);
   border-radius: var(--maec-radius-sm);
 }
 .maec-stat-value {
-  font-size: 24px;
-  font-weight: 700;
+  font-size: 16px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   color: var(--maec-ink);
 }
-.maec-stat-label { font-size: 12px; font-weight: 600; color: var(--maec-ink-soft); }
+.maec-stat-label { font-size: 11px; color: var(--maec-ink-soft); }
 .maec-stat-hint { font-size: 11px; color: var(--maec-ink-faint); }
 
 .maec-mono {
@@ -501,20 +555,99 @@
   gap: 5px;
 }
 
-/* ------------------------------------------------- provisioning (screen 003) */
-.maec-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 14px;
-  margin-top: 18px;
+/* ------------------------------------- the designs' additions (v1.0-v1.2) */
+.maec-section { font-size: 12px; font-weight: 400; margin: 22px 0 12px; }
+
+/* a row that opens: the whole row is the target, and says so */
+.maec-table tbody tr.maec-opens { cursor: pointer; }
+.maec-table tbody tr.maec-opens:hover td { background: var(--maec-panel); }
+.maec-table tbody tr.maec-open td { background: var(--maec-panel); }
+.maec-table td.maec-subrow { padding: 4px 0 14px; height: auto; background: var(--maec-card); }
+
+/* a pill that is also a control (a tool cell) */
+.maec-chip-button { background: none; border: none; padding: 0; cursor: pointer; }
+.maec-chip-button:focus-visible { outline: 2px solid var(--maec-focus); outline-offset: 2px; border-radius: 999px; }
+/* a cell a tool rule has narrowed: outlined, so it reads as set by hand */
+.maec-chip.ruled { box-shadow: inset 0 0 0 1px currentColor; }
+
+/* the role x tool matrix: pills centred under their role */
+.maec-matrix td, .maec-matrix th { text-align: center; }
+.maec-matrix td:first-child, .maec-matrix th:first-child { text-align: left; }
+
+/* audit: four numbers, and the posture card, which takes the space of two */
+.maec-stats.audit { grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 2.2fr); margin-top: 16px; }
+.maec-posture { display: grid; gap: 9px; align-content: start; }
+.maec-posture-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--maec-ink-soft); }
+.maec-posture-line { font-size: 11px; color: var(--maec-ink-soft); }
+.maec-controls-strip {
+  margin-top: 22px; padding: 16px; font-size: 11px; line-height: 1.8;
+  background: var(--maec-panel); border: 1px solid var(--maec-border);
+  border-radius: var(--maec-radius-sm); color: var(--maec-ink-soft);
 }
-.maec-bigcard {
-  display: grid;
-  gap: 9px;
-  justify-items: start;
-  align-content: start;
-  padding: 18px;
-  background: var(--maec-row-header);
-  border: 1px solid var(--maec-border);
-  border-radius: var(--maec-radius-sm);
+.maec-controls-strip strong { font-size: 12px; font-weight: 500; color: var(--maec-ink); margin-right: 6px; }
+.maec-controls-strip .off { color: var(--maec-denied-ink); }
+.maec-filters { margin-bottom: 12px; }
+.maec-filters .maec-search { flex: 1 1 200px; }
+
+/* onboarding */
+.maec-notice {
+  margin: 18px 0 20px; padding: 12px 14px 12px 24px; position: relative;
+  background: var(--maec-panel); border: 1px solid var(--maec-border);
+  border-radius: var(--maec-radius-sm); font-size: 12px;
+}
+.maec-notice::before {
+  content: ""; position: absolute; left: 11px; top: 11px; bottom: 11px;
+  width: 3px; border-radius: 2px; background: var(--maec-notice-bar);
+}
+.maec-notice-title {
+  display: block; margin-bottom: 3px;
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .03em; color: var(--maec-ink-soft);
+}
+.maec-upload { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr); gap: 28px; }
+.maec-upload h3 { font-size: 12px; font-weight: 400; margin: 0 0 12px; }
+.maec-dropbox {
+  display: grid; place-content: center; gap: 8px; text-align: center;
+  min-height: 108px; padding: 18px; cursor: pointer;
+  border: 1.5px solid var(--maec-border-strong); border-radius: 8px;
+  background: var(--maec-card); font-size: 12px;
+}
+.maec-dropbox.over { border-color: var(--maec-focus); background: var(--maec-scoped-fill); }
+.maec-dropbox:focus-within { outline: 2px solid var(--maec-focus); outline-offset: 2px; }
+.maec-dropbox small { font-size: 10.5px; color: var(--maec-ink-soft); }
+.maec-dropbox u { color: var(--maec-focus); }
+.maec-guidelines {
+  min-height: 108px; padding: 16px 20px; font-size: 10.5px; line-height: 1.6;
+  background: var(--maec-panel); border: 1px solid var(--maec-border);
+  border-radius: var(--maec-radius-sm); color: var(--maec-ink-soft);
+}
+.maec-guidelines p { margin: 0; }
+.maec-guidelines .maec-guidelines-title { font-size: 12px; color: var(--maec-ink); margin-bottom: 8px; }
+.maec-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+.maec-upload-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.maec-boxed { border: 1px solid var(--maec-border); border-radius: var(--maec-radius-sm); padding: 0 4px; }
+.maec-boxed .maec-table thead th { background: var(--maec-panel); }
+.maec-subtable { width: calc(100% - 8px); margin: 0 4px; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+.maec-subtable th {
+  background: var(--maec-row-header); color: var(--maec-ink-soft);
+  font-size: 10.5px; font-weight: 500; text-align: left; padding: 8px 16px; white-space: nowrap;
+}
+.maec-subtable th:first-child { border-radius: 6px 0 0 6px; }
+.maec-subtable th:last-child { border-radius: 0 6px 6px 0; }
+.maec-subtable td { padding: 7px 16px; border-bottom: 1px solid var(--maec-row-line); }
+.maec-subtable tr:last-child td { border-bottom: none; }
+/* nested in the history table: none of its header or row styling carries in */
+.maec-table .maec-subtable th { text-transform: none; letter-spacing: normal; padding: 8px 16px; }
+.maec-table .maec-subtable td { height: auto; padding: 7px 16px; background: var(--maec-card); }
+
+/* ------------------------------------------------------------ narrow screens */
+@media (max-width: 900px) {
+  .maec-admin-header { padding: 0 12px; }
+  .maec-who-email { display: none; }
+  .maec-body { padding: 14px 12px 24px; }
+  .maec-card { padding: 16px; }
+  .maec-stats.audit { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .maec-stats.audit .maec-posture { grid-column: 1 / -1; }
+  .maec-upload { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .maec-toolbar.split .maec-search,
+  .maec-toolbar.split .maec-btn { flex: 1 1 100%; }
 }

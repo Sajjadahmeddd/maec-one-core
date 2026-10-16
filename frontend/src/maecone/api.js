@@ -149,17 +149,6 @@ export const admin = {
     return send('POST', `/api/admin/users/${id}/reset-password`, { password })
   },
 
-  // ---- screen 003: provisioning
-  provisioning() {
-    return fetch('/api/admin/provisioning').then(asJson)
-  },
-  createProvisioning(rule) {
-    return send('POST', '/api/admin/provisioning', rule)
-  },
-  patchProvisioning(id, patch) {
-    return send('PATCH', `/api/admin/provisioning/${id}`, patch)
-  },
-
   // ---- screen 005: bulk import
   importValidate(file) {
     const form = new FormData()
@@ -173,6 +162,10 @@ export const admin = {
   },
   importBatches() {
     return fetch('/api/admin/import/batches').then(asJson)
+  },
+  /** One batch's people and the role each holds in each application. */
+  importBatch(batchId) {
+    return fetch(`/api/admin/import/batches/${encodeURIComponent(batchId)}`).then(asJson)
   },
   importTemplate() {
     window.location.assign('/api/admin/import/template')

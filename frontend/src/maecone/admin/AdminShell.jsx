@@ -1,70 +1,77 @@
-// The Global Admin shell — layout only.
+// The Global Admin shell: the header, the tab bar, and the screen under it.
 //
-// The five screens are the next build. What is here is the frame they will
-// hang in: the header, the tab strip, and a placeholder per tab, all built
-// on the tokens in ../theme.css so those screens inherit a settled look
-// rather than inventing one.
+// Laid out as the designs in frontend/Global admin GUI/ have it: the MAEC
+// wordmark with the version, the person's address and avatar on the right,
+// and the five sections as a boxed tab bar on the page. The way back to the
+// launcher, Change password and Sign out are in the menu the avatar opens;
+// the wordmark goes to the launcher too.
 //
 // Reaching this at all is a convenience, not a control. `require_global_admin`
 // on the server refuses /api/admin/* to anyone else, whatever the browser
 // believes, and the guard refuses the whole prefix a second time.
 
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 
 import AuditScreen from './AuditScreen.jsx'
 import OnboardingScreen from './OnboardingScreen.jsx'
-import ProvisioningScreen from './ProvisioningScreen.jsx'
 import RolesScreen from './RolesScreen.jsx'
+import ToolsScreen from './ToolsScreen.jsx'
 import UsersScreen from './UsersScreen.jsx'
 import { CHANGE_PASSWORD, HOME } from '../next.js'
-import ToolsScreen from './ToolsScreen.jsx'
 
-// The top-level pills: back to the launcher, which lists every application
-// and opens each at its own address, and this panel. The applications are
-// not repeated here — a hard-coded list of them is how the old "Engineering
-// Tools" pill came to point at /hapext, a page Core does not serve.
-const SECTIONS = [
-  { key: 'launcher', label: 'Launcher', to: HOME, ready: true },
-  { key: 'admin', label: 'Admin panel', to: '/admin', ready: true },
-]
+// "v1.0": major.minor of the version that was built (vite.config.js)
+// eslint-disable-next-line no-undef
+const VERSION = `v${String(__APP_VERSION__).split('.').slice(0, 2).join('.')}`
 
+// The sections, in the order the designs and the brief give them.
+// Provisioning (directory groups -> roles) has no tab: its API and data are
+// unchanged, and nothing here deletes them.
 const TABS = [
-  { path: 'users', label: 'Users & Access',
-    lede: 'Create people, assign roles and application seats, manage status.' },
-  { path: 'roles', label: 'Roles & Permissions',
-    lede: 'Who holds which role, at which scope, and what that lets them do.' },
-  { path: 'tools', label: 'Tool Access',
-    lede: 'Per-organisation rules that narrow what a role may do with a module.' },
-  { path: 'provisioning', label: 'Provisioning',
-    lede: 'Directory groups mapped to roles, and what a new joiner gets by default.' },
-  { path: 'audit', label: 'Audit Log',
-    lede: 'Every sign-in, grant and refusal — who, when, from where.' },
-  { path: 'onboarding', label: 'Onboarding',
-    lede: 'Bulk import of people, with a validation report before anything is written.' },
+  { path: 'users', label: 'Users', element: <UsersScreen /> },
+  { path: 'roles', label: 'User & Role Access', element: <RolesScreen /> },
+  { path: 'tools', label: 'Tool-Level Settings', element: <ToolsScreen /> },
+  { path: 'audit', label: 'Audit Logs & Security', element: <AuditScreen /> },
+  { path: 'onboarding', label: 'User Onboarding & Import', element: <OnboardingScreen /> },
 ]
 
-// Which tabs have a real screen behind them. The rest render a placeholder
-// rather than a fabricated one.
-// every tab now has a screen behind it
-const BUILT = new Set(
-  ['users', 'roles', 'tools', 'audit', 'onboarding', 'provisioning'])
+/** The avatar's letter: the first of the address. */
+const initial = (email = '') => (email.trim()[0] || '?').toUpperCase()
 
+function AccountMenu({ email, onLauncher, onChangePassword, onSignOut }) {
+  const [open, setOpen] = useState(false)
+  const box = useRef(null)
 
-function initials(email = '') {
-  const local = email.split('@')[0] || ''
-  const parts = local.split(/[._-]+/).filter(Boolean)
-  const letters = parts.length > 1
-    ? parts[0][0] + parts[1][0]
-    : local.slice(0, 2)
-  return (letters || '?').toUpperCase()
-}
+  // closes on a click anywhere else, and on Escape
+  useEffect(() => {
+    if (!open) return undefined
+    const away = (event) => { if (!box.current?.contains(event.target)) setOpen(false) }
+    const escape = (event) => { if (event.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [open])
 
-function Placeholder({ label, lede }) {
+  const pick = (action) => () => { setOpen(false); action() }
+
   return (
-    <div className="maec-card maec-placeholder">
-      <h1 className="maec-h1">{label}</h1>
-      <p className="maec-lede">{lede}</p>
-      <span className="maec-soon">Coming in the next build</span>
+    <div className="maec-who" ref={box}>
+      <button type="button" className="maec-who-button" aria-haspopup="menu"
+              aria-expanded={open} aria-label={`Account menu for ${email}`}
+              onClick={() => setOpen((o) => !o)}>
+        <span className="maec-who-email">{email}</span>
+        <span className="maec-avatar" aria-hidden="true">{initial(email)}</span>
+      </button>
+      {open && (
+        <ul className="maec-menu" role="menu">
+          <li role="none"><button type="button" role="menuitem" onClick={pick(onLauncher)}>Launcher</button></li>
+          <li role="none"><button type="button" role="menuitem" onClick={pick(onChangePassword)}>Change password</button></li>
+          <li role="none"><button type="button" role="menuitem" onClick={pick(onSignOut)}>Sign out</button></li>
+        </ul>
+      )}
     </div>
   )
 }
@@ -76,72 +83,36 @@ export default function AdminShell({ session, onSignOut }) {
   return (
     <div className="maec-admin">
       <header className="maec-admin-header">
-        <button className="maec-wordmark" onClick={() => navigate(HOME)}
+        <button type="button" className="maec-wordmark" onClick={() => navigate(HOME)}
                 title="Back to the launcher">
           <img src="/maec-logo.png" alt="MAEC" />
-          <span>ONE</span>
+          <span className="maec-version">{VERSION}</span>
         </button>
-
-        <nav>
-          <ul className="maec-nav">
-            {SECTIONS.map(({ key, label, to, ready }) => (
-              <li key={key}>
-                <button
-                  type="button"
-                  className={`maec-pill${key === 'admin' ? ' active' : ''}`}
-                  disabled={!ready}
-                  title={ready ? `Go to ${label}` : 'Coming soon'}
-                  onClick={() => to && navigate(to)}
-                >
-                  {label}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </nav>
 
         <span className="maec-spacer" />
 
-        <div className="maec-who">
-          <span className="maec-who-email">{session?.email}</span>
-          <span className="maec-avatar" aria-hidden="true">{initials(session?.email)}</span>
-          {/* the voluntary change; its Back returns to this screen */}
-          <button type="button" className="maec-btn secondary"
-                  onClick={() => navigate(CHANGE_PASSWORD, { state: { from: pathname } })}>
-            Change password
-          </button>
-          <button type="button" className="maec-btn secondary" onClick={onSignOut}>
-            Sign out
-          </button>
-        </div>
+        <AccountMenu
+          email={session?.email || ''}
+          onLauncher={() => navigate(HOME)}
+          // the voluntary change; its Back returns to this screen
+          onChangePassword={() => navigate(CHANGE_PASSWORD, { state: { from: pathname } })}
+          onSignOut={onSignOut}
+        />
       </header>
 
-      <nav className="maec-tabs">
-        {TABS.map(({ path, label }) => (
-          <NavLink
-            key={path}
-            to={`/admin/${path}`}
-            className={({ isActive }) => `maec-tab${isActive ? ' active' : ''}`}
-          >
-            {label}
-          </NavLink>
-        ))}
-      </nav>
-
       <main className="maec-body">
+        <nav className="maec-tabs" aria-label="Global Admin sections">
+          {TABS.map(({ path, label }) => (
+            <NavLink key={path} to={`/admin/${path}`}
+                     className={({ isActive }) => `maec-tab${isActive ? ' active' : ''}`}>
+              {label}
+            </NavLink>
+          ))}
+        </nav>
+
         <Routes>
           <Route index element={<Navigate to="users" replace />} />
-          <Route path="users" element={<UsersScreen />} />
-          <Route path="roles" element={<RolesScreen />} />
-          <Route path="audit" element={<AuditScreen />} />
-          <Route path="onboarding" element={<OnboardingScreen />} />
-          <Route path="provisioning" element={<ProvisioningScreen />} />
-          <Route path="tools" element={<ToolsScreen />} />
-          {/* the remaining three arrive in the next build */}
-          {TABS.filter((t) => !BUILT.has(t.path)).map(({ path, label, lede }) => (
-            <Route key={path} path={path}
-                   element={<Placeholder label={label} lede={lede} />} />
-          ))}
+          {TABS.map(({ path, element }) => <Route key={path} path={path} element={element} />)}
           <Route path="*" element={<Navigate to="/admin/users" replace />} />
         </Routes>
       </main>

@@ -192,17 +192,19 @@ and signs out the sessions minted under the old password. Then unset it.
 .venv/Scripts/python -m pytest
 ```
 
-594 tests. 571 run against an in-memory SQLite; 21 run against the PostgreSQL
+604 tests. 580 run against an in-memory SQLite; 21 run against the PostgreSQL
 in your `.env` and cover what SQLite cannot — column widths, CHECK
 constraints, the append-only trigger, the migrations run up and down with data
 present, real concurrency on single-use authorization codes, and a session
 revoked on one connection being refused on another at once. Those 21 skip
 themselves if no PostgreSQL is configured — a green run with them skipped has
-not tested any of that. Two more run frontend rules under Node, so Node must
-be installed: the sign-in page's `next` allowlist — the open-redirect surface
-— (`node --test frontend/src/maecone/next.test.js`), and where sign-in lands,
-what each launcher tile does and who sees the Admin panel card
-(`frontend/src/maecone/launcher.test.js`).
+not tested any of that. Three more run frontend rules under Node, so Node
+must be installed: the sign-in page's `next` allowlist — the open-redirect
+surface — (`node --test frontend/src/maecone/next.test.js`); where sign-in
+lands, what each launcher tile does and who sees the Admin panel card
+(`frontend/src/maecone/launcher.test.js`); and how the Global Admin screens
+word, order and colour what the server sends
+(`frontend/src/maecone/admin/present.test.js`).
 
 ## The gate — how an app lets people in
 

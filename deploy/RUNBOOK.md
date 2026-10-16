@@ -276,7 +276,7 @@ cd /opt/maec-one-core && docker compose -f deploy/compose.yml --env-file deploy/
 
 ### 5a. Replace the bootstrap password
 
-In the admin panel → **Users & Access** → your own account → **Account** →
+In the admin panel → **Users** → your own account → **Account** →
 type a temporary password → reset. You are signed out. Sign in with it, and
 Core makes you choose your own. Then:
 
@@ -299,7 +299,7 @@ docker compose -f deploy/compose.yml --env-file deploy/env.production exec core-
 The old app has **one shared password**. The new one, at
 `engtools.mirageaec.com`, lets in only people with their own account *and* an
 Engineering Tools seat. Make the list first — everyone who uses Engineering
-Tools today — and for each person, in **Users & Access**:
+Tools today — and for each person, in **Users**:
 
 1. **Add user**: name, email, department, and an **initial password**. Core
    marks it "must change password": they choose their own at first sign-in.
@@ -531,7 +531,7 @@ in as an ordinary person with an Engineering Tools seat — not the admin.
 3. **Already signed in at MAEC One.** Open `https://auth.mirageaec.com` in a
    new tab: you're already signed in.
 4. **No seat, no access.** As admin, in a *different browser*, remove the
-   person's Engineering Tools seat (**Users & Access**, "Remove seat"). Refresh
+   person's Engineering Tools seat (**Users**, "Remove seat"). Refresh
    Engineering Tools: "No access". Give the seat back ("Assign seat").
 5. **One sign-out.** Sign out at MAEC One. Refresh Engineering Tools: you're
    sent to the login.
@@ -788,4 +788,4 @@ For an app that will live at `<app>.mirageaec.com`:
    `<app>.mirageaec.com { reverse_proxy localhost:<port> }`: back up,
    validate, reload, as in step 7.
 
-Then give people seats on it in **Users & Access**.
+Then give people seats on it in **Users**.
