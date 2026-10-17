@@ -588,6 +588,21 @@
 /* a switched-off tool: its role cells read as not in force */
 .maec-row-off td:not(:last-child) .maec-pill-select { opacity: .55; }
 
+/* Tool-Level Settings: an app's monitoring line above its features */
+.maec-table tbody tr.maec-app-row td {
+  height: auto; padding: 12px 20px 8px; text-align: left;
+  background: var(--maec-card); border-bottom: 1px solid var(--maec-border);
+}
+.maec-app-row strong { font-size: 12px; font-weight: 600; margin-right: 12px; }
+.maec-monitor { font-size: 11px; color: var(--maec-ink-soft); }
+.maec-monitor.stale { color: var(--maec-warn-ink); background: var(--maec-warn-fill);
+                      border-radius: 4px; padding: 2px 7px; }
+.maec-badge { margin-left: 8px; padding: 1px 8px; font-size: 10px; }
+.maec-row-quiet td:first-child { color: var(--maec-ink-faint); }
+.maec-row-quiet td:not(:first-child) .maec-pill-select { opacity: .55; }
+.maec-danger { color: var(--maec-denied-ink); font-size: 11px; }
+.maec-danger:hover { color: var(--maec-denied-ink); text-decoration: underline; }
+
 /* the role x tool matrix: pills centred under their role */
 .maec-matrix td, .maec-matrix th { text-align: center; }
 .maec-matrix td:first-child, .maec-matrix th:first-child { text-align: left; }

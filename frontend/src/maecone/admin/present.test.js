@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import {
   accessBadge, actionLabel, batchColumns, batchLabel, batchStatus, heldIn,
   posture, resultBadge, roleOrder, roleTone, shortWhen, sourceLabel,
-  targetLabel, toolLabel, toolStatus,
+  targetLabel, toolLabel, toolStatus, ago, monitorLine,
 } from './present.js'
 
 const role = (key, name, level, is_system = true) => ({ key, name, level, is_system })
@@ -39,10 +39,12 @@ test('two levels only: Full Access or No Access', () => {
 })
 
 test('tool rows and their status', () => {
-  assert.equal(toolLabel({ application_name: 'Engineering Tools', module_key: 'hapext' }),
-               'Engineering Tools - hapext')
-  assert.equal(toolLabel({ application_name: 'Project Management', module_key: 'app' }),
-               'Project Management')
+  assert.equal(toolLabel({ application_name: 'Engineering Tools', module_key: 'hapext',
+                           name: 'HAP Extractor' }), 'Engineering Tools – HAP Extractor')
+  assert.equal(toolLabel({ application_name: 'Project Management', module_key: 'task71',
+                           name: 'Project Lead' }), 'Project Management – Project Lead')
+  // until the app has reported, the key stands in for the name
+  assert.equal(toolLabel({ application_name: 'Field App', module_key: 'sheet' }), 'Field App – sheet')
   assert.equal(toolStatus('active').label, 'Active')
   assert.equal(toolStatus('inactive').label, 'Inactive')
   assert.equal(toolStatus(undefined).label, 'Active', 'no setting is active')
@@ -98,4 +100,25 @@ test('import batches', () => {
   assert.equal(heldIn(people[0], 'projects').name, 'Project Lead')
   assert.equal(heldIn(people[0], 'engineering').name, 'Normal User / Engineer')
   assert.equal(heldIn({ roles: {} }, 'engineering'), null)
+})
+
+test('relative times', () => {
+  const now = Date.parse('2026-10-17T12:00:00Z')
+  assert.equal(ago('2026-10-17T11:59:40Z', now), 'just now')
+  assert.equal(ago('2026-10-17T11:58:00Z', now), '2 min ago')
+  assert.equal(ago('2026-10-17T09:00:00Z', now), '3 h ago')
+  assert.equal(ago('2026-10-16T12:00:00Z', now), '1 day ago')
+  assert.equal(ago(null, now), null)
+})
+
+test('the monitoring line, and amber when an app has gone quiet', () => {
+  const now = Date.parse('2026-10-17T12:00:00Z')
+  const fresh = { reported_at: '2026-10-17T11:58:00Z', version: '93e6aee', new: 3, not_reported: 1 }
+  assert.deepEqual(monitorLine(fresh, now), {
+    text: 'Last reported 2 min ago · version 93e6aee · 3 new · 1 not reported',
+    stale: false })
+  assert.equal(monitorLine({ ...fresh, new: 0, not_reported: 0 }, now).text,
+               'Last reported 2 min ago · version 93e6aee')
+  assert.equal(monitorLine({ ...fresh, reported_at: '2026-10-16T11:00:00Z' }, now).stale, true)
+  assert.deepEqual(monitorLine({ reported_at: null }, now), { text: 'Has not reported yet', stale: true })
 })

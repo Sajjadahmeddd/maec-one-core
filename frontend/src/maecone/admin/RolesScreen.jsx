@@ -14,15 +14,13 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { admin } from '../api'
-import { roleOrder } from './present.js'
+import { roleOrder, toolLabel } from './present.js'
 
 const TITLE = { view: 'View', convert: 'Convert', export: 'Export', configure: 'Configure', use: 'Use' }
 
-/** "engineering:hapext" -> "Engineering Tools - hapext", from the registry's own names. */
-function moduleLabel(qualified, apps) {
-  const [app, module] = qualified.split(':')
-  const name = apps[app] || app
-  return module === 'app' ? name : `${name} - ${module}`
+/** "<app>:<feature>" -> "<App> – <name>", from the names the apps reported. */
+function moduleLabel(qualified, labels) {
+  return labels[qualified] || qualified
 }
 
 function RoleDetail({ role, data, apps, busy, onToggle, onDelete }) {
@@ -115,10 +113,10 @@ export default function RolesScreen() {
   const load = () => admin.roles().then(setData).catch((e) => setError(e.message))
   useEffect(() => {
     load()
-    // application names for the module labels, from the same registry
+    // each feature's label, from the names its app reported
     admin.toolRules()
       .then((t) => setApps(Object.fromEntries(
-        t.modules.map((m) => [m.application_key, m.application_name]))))
+        t.modules.map((m) => [`${m.application_key}:${m.module_key}`, toolLabel(m)]))))
       .catch(() => {})
   }, [])
 

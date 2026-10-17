@@ -195,6 +195,10 @@ export const admin = {
   },
 
   // ---- screen 002: per-organisation overrides
+  /** Remove a feature its app no longer reports; its key is retired. */
+  removeFeature(applicationKey, featureKey) {
+    return send('DELETE', `/api/admin/features/${encodeURIComponent(applicationKey)}/${encodeURIComponent(featureKey)}`)
+  },
   /** Switch a tool on (active) or off (inactive) for the whole organisation. */
   putToolStatus(applicationKey, moduleKey, status) {
     return send('PUT', '/api/admin/tool-status',

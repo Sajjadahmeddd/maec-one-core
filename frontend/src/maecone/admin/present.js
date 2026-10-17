@@ -31,11 +31,40 @@ const ACCESS = {
  *  Anything else reads as No Access — the engine refuses it too. */
 export const accessBadge = (level) => ACCESS[level] || ACCESS.no_access
 
-/** "Engineering Tools - hapext"; an application's single module is just its name. */
+/** "<App> – <name>": the name the app reported for the feature (its key until
+ *  it has reported). The key itself is shown on hover. */
 export function toolLabel(module) {
-  return module.module_key === 'app'
-    ? module.application_name
-    : `${module.application_name} - ${module.module_key}`
+  return `${module.application_name} – ${module.name || module.module_key}`
+}
+
+/** "just now", "2 min ago", "3 h ago", "5 days ago". */
+export function ago(iso, now = Date.now()) {
+  const at = new Date(iso).getTime()
+  if (!iso || Number.isNaN(at)) return null
+  const minutes = Math.max(0, Math.round((now - at) / 60000))
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours} h ago`
+  const days = Math.round(hours / 24)
+  return `${days} day${days === 1 ? '' : 's'} ago`
+}
+
+const DAY = 24 * 60 * 60 * 1000
+
+/**
+ * The line above an app's rows: "Last reported 2 min ago · version 93e6aee ·
+ * 3 new · 1 not reported". `stale` (shown in amber) when the app has not
+ * reported for over 24 hours, or never has.
+ */
+export function monitorLine(app, now = Date.now()) {
+  const when = ago(app.reported_at, now)
+  const parts = [when ? `Last reported ${when}` : 'Has not reported yet']
+  if (app.version) parts.push(`version ${app.version}`)
+  if (app.new) parts.push(`${app.new} new`)
+  if (app.not_reported) parts.push(`${app.not_reported} not reported`)
+  const stale = !app.reported_at || now - new Date(app.reported_at).getTime() > DAY
+  return { text: parts.join(' · '), stale }
 }
 
 /** A tool's Status on Tool-Level Settings: this organisation's switch. */
