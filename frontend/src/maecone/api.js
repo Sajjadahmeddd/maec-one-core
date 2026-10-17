@@ -195,6 +195,16 @@ export const admin = {
   },
 
   // ---- screen 002: per-organisation overrides
+  // ---- applications: add and edit; the key is permanent, nothing is deleted
+  applications() {
+    return fetch('/api/admin/applications').then(asJson)
+  },
+  createApplication(app) {
+    return send('POST', '/api/admin/applications', app)
+  },
+  patchApplication(key, patch) {
+    return send('PATCH', `/api/admin/applications/${encodeURIComponent(key)}`, patch)
+  },
   /** Remove a feature its app no longer reports; its key is retired. */
   removeFeature(applicationKey, featureKey) {
     return send('DELETE', `/api/admin/features/${encodeURIComponent(applicationKey)}/${encodeURIComponent(featureKey)}`)

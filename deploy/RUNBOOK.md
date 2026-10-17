@@ -765,27 +765,52 @@ docker network inspect maec_core_net --format '{{range .Containers}}{{.Name}} {{
 
 ---
 
-## Adding the next app
+## Bringing a new application into MAEC One
 
-For an app that will live at `<app>.mirageaec.com`:
+For an app that will live at `<app>.mirageaec.com`. No code change in Core:
+the app is added on a screen, and it tells Core its own features.
 
-1. **Register it in Core** — a row in `applications` (key, name,
-   `status = 'live'`), its permissions, and a subscription for the
-   organisation. (No screen for this yet; SQL, as in 5b.)
-2. **Set its `base_url`** — `https://<app>.mirageaec.com`, as in 5b. Without
-   it, people are not sent back to it after sign-in.
-3. **Add a gate secret** — generate one (3c), add it to Core's
-   `GATE_SECRETS` as `,<app_key>=<secret>`, restart Core
-   (`docker compose … up -d`), and put the same value in the app's settings.
-4. **Join `maec_core_net`** — in the app's compose file, as an external
-   network (see the README's Deploying section); it calls
-   `http://maec-core:8000`.
-5. **Add the gate middleware** — every request checked with Core, as
-   Engineering Tools does (`backend/maec_auth/` in its repository).
-6. **Pick its port and add a Caddy block.** Check the port is free first
-   (`sudo ss -ltnp | grep -E ':<port>\b' || echo free`) — 8001, 8080, 8081
-   and 8082 are taken. Publish on `127.0.0.1` only, then add
-   `<app>.mirageaec.com { reverse_proxy localhost:<port> }`: back up,
+1. **Add it on the Applications screen.** Admin panel → **Applications** →
+   **+ Add Application**: its key (lowercase, e.g. `itdesk` — permanent, never
+   changed or reused), its name, its status (`coming_soon` until it is
+   ready), and its address, `https://<app>.mirageaec.com`. This also
+   subscribes the organisation to it, so seats can be given. The screen then
+   shows **Gate secret: No**.
+
+2. **Add its gate secret to Core's settings file, and restart Core.**
+
+   ```bash
+   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+   # Prints a new gate secret. Run it once, on the server; paste it in the
+   # next step and into the app's own settings. Never save it anywhere else.
+
+   nano /opt/maec-one-core/deploy/env.production
+   # Append ,<app key>=<that secret> to the end of the GATE_SECRETS line.
+   # Nothing else on the line changes.
+
+   cd /opt/maec-one-core && docker compose -f deploy/compose.yml --env-file deploy/env.production up -d
+   # Restarts Core with the new secret. The Applications screen now shows
+   # "Gate secret: Yes". Until it does, the app cannot sign anybody in.
+   ```
+
+3. **Deploy the app**, with the same secret in its settings, following
+   `docs/APP-STANDARD.md`: it joins `maec_core_net` as an external network and
+   calls `http://maec-core:8000`; its own stack uses its own subnet and its own
+   port. Check the port is free first
+   (`sudo ss -ltnp | grep -E ':<port>' || echo free` — 8001, 8080, 8081 and
+   8082 are taken), publish on `127.0.0.1` only, add the DNS A record and
+   `<app>.mirageaec.com { reverse_proxy localhost:<port> }` to Caddy: back up,
    validate, reload, as in step 7.
 
-Then give people seats on it in **Users**.
+4. **Watch it report its features.** When the app starts it reports them; in
+   **Tool-Level Settings** its rows appear under its name, marked New and
+   switched on for Global Admin only, with "Last reported just now · version
+   …" above them. Switch each feature on for the roles that should have it.
+
+5. **Make it live and give people seats.** On the Applications screen set its
+   status to **Live**. Then, in **Users**, give each person a seat on it, and
+   in **User & Role Access** a role scoped to it.
+
+To retire an application, set it **Inactive** on the same screen: the
+launcher leaves it out and its gate refuses everyone; its history stays.
+Applications are never deleted.

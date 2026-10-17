@@ -113,16 +113,11 @@ def run(db: Session, *, admin_email: str, admin_password: str,
             made("applications")
         apps[key] = app
 
-    # -- corrections to rows an earlier seed wrote. Only what is stated here,
-    # and only from the old value: a person's later, deliberate change wins.
-    # Timesheet was seeded live with nothing behind it. Corrected while it is
-    # still live with no address; once someone gives it a base_url and makes it
-    # live, this never touches it again.
-    timesheet = apps["timesheet"]
-    if timesheet.status == "live" and timesheet.base_url is None:
-        timesheet.status = "coming_soon"
-        db.flush()
-        made("application corrections")
+    # An application that exists is never changed or removed here: since
+    # Prompt 19 a Global Admin adds and edits applications on the Applications
+    # screen, and the seed only creates the first ones when they are absent.
+    # (The one-off Timesheet correction of Prompt 15 has done its work on every
+    # database and is gone: it changed an existing row.)
 
     # -- roles (system: org_id NULL)
     roles: dict[str, Role] = {}

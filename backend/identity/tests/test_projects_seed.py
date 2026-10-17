@@ -80,15 +80,16 @@ def _snapshot(db):
             db.scalar(select(func.count()).select_from(UserLicense)))
 
 
-def test_an_existing_database_with_timesheet_live_is_corrected_and_nothing_else(identity, db):
-    """A database seeded before Prompt 15 has timesheet live. The seed that
-    runs on the next start corrects it, and changes nothing else."""
+def test_the_seed_never_changes_an_existing_application(identity, db):
+    """Since Prompt 19 applications are the Global Admin's (the Applications
+    screen). The seed creates the first ones only when absent; one that exists
+    is left exactly as it is — even timesheet live with no address, which the
+    Prompt 15 seed used to correct."""
     _app(db, "timesheet").status = "live"
     db.commit()
     before = _snapshot(db)
-    created = _reseed(db)
-    assert created == {"application corrections": 1}
-    assert _app(db, "timesheet").status == "coming_soon"
+    assert _reseed(db) == {}
+    assert _app(db, "timesheet").status == "live"
     assert _snapshot(db) == before
 
 

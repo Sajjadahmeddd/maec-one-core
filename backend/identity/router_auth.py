@@ -68,8 +68,9 @@ def _apps_payload(db: Session, user: User | None) -> list[dict]:
     """The catalogue, and — for a signed-in person — what they may open.
 
     Computed here from subscriptions and seats, never from the client. The
-    launcher renders exactly this list: a tile for every application, which
-    opens when it is live, `entitled` is true, and it has a base_url.
+    launcher renders exactly this list: a tile for every application that is
+    not inactive (retired), which opens when it is live, `entitled` is true,
+    and it has a base_url.
 
     One query for the catalogue, whatever the number of applications: each
     application with this organisation's subscription to it and this
@@ -82,7 +83,8 @@ def _apps_payload(db: Session, user: User | None) -> list[dict]:
     what someone may open.
     """
     if user is None:
-        apps = db.scalars(select(Application).order_by(Application.name)).all()
+        apps = db.scalars(select(Application).where(Application.status != "inactive")
+                          .order_by(Application.name)).all()
         return [{"key": a.key, "name": a.name, "description": a.description,
                  "status": a.status, "base_url": a.base_url} for a in apps]
 
@@ -93,6 +95,7 @@ def _apps_payload(db: Session, user: User | None) -> list[dict]:
                                       Subscription.org_id == user.org_id))
         .outerjoin(UserLicense, and_(UserLicense.application_id == Application.id,
                                      UserLicense.user_id == user.id))
+        .where(Application.status != "inactive")
         .order_by(Application.name)
     ).all()
 

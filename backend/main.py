@@ -30,7 +30,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .identity import (
-    admin_audit, admin_import, admin_provisioning, admin_roles, admin_tools,
+    admin_apps, admin_audit, admin_import, admin_provisioning, admin_roles, admin_tools,
     admin_users, guard, keys, router_admin, router_auth, router_gate, router_oidc,
 )
 
@@ -252,6 +252,7 @@ app.include_router(router_auth.router)
 app.include_router(router_admin.router)
 app.include_router(admin_roles.router)
 app.include_router(admin_tools.router)
+app.include_router(admin_apps.router)
 app.include_router(admin_users.router)
 app.include_router(admin_audit.router)
 app.include_router(admin_import.router)

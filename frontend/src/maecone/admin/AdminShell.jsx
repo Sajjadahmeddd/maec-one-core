@@ -2,7 +2,7 @@
 //
 // Laid out as the designs in frontend/Global admin GUI/ have it: the MAEC
 // wordmark with the version, the person's address and avatar on the right,
-// and the five sections as a boxed tab bar on the page. The way back to the
+// and the sections as a boxed tab bar on the page. The way back to the
 // launcher, Change password and Sign out are in the menu the avatar opens;
 // the wordmark goes to the launcher too.
 //
@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 
+import ApplicationsScreen from './ApplicationsScreen.jsx'
 import AuditScreen from './AuditScreen.jsx'
 import OnboardingScreen from './OnboardingScreen.jsx'
 import RolesScreen from './RolesScreen.jsx'
@@ -33,6 +34,7 @@ const TABS = [
   { path: 'tools', label: 'Tool-Level Settings', element: <ToolsScreen /> },
   { path: 'audit', label: 'Audit Logs & Security', element: <AuditScreen /> },
   { path: 'onboarding', label: 'User Onboarding & Import', element: <OnboardingScreen /> },
+  { path: 'applications', label: 'Applications', element: <ApplicationsScreen /> },
 ]
 
 /** The avatar's letter: the first of the address. */

@@ -630,6 +630,36 @@ def test_one_apps_report_never_waits_for_another_apps(pg, racing_apps):
     behind.join(timeout=60)
 
 
+def test_the_inactive_status_migration_round_trips(pg):
+    """9e4c2a7d5b16 (Prompt 19 B): down with an inactive application — it
+    becomes coming_soon, which the old constraint accepts — and up again,
+    where inactive is allowed and anything else still refused."""
+    import pytest as _pytest
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy.exc import IntegrityError
+
+    cfg = Config(str(REPO / "backend" / "identity" / "alembic.ini"))
+    with pg.session_factory()() as session:
+        session.execute(text("update applications set status = 'inactive' where key = 'timesheet'"))
+        session.commit()
+
+    command.downgrade(cfg, "7b2e5d1f9c40")
+    with pg.session_factory()() as session:
+        assert session.scalar(text(
+            "select status from applications where key = 'timesheet'")) == "coming_soon"
+
+    command.upgrade(cfg, "head")
+    with pg.session_factory()() as session:
+        session.execute(text("update applications set status = 'inactive' where key = 'timesheet'"))
+        session.commit()
+        with _pytest.raises(IntegrityError):
+            session.execute(text("update applications set status = 'retired' where key = 'timesheet'"))
+        session.rollback()
+        session.execute(text("update applications set status = 'coming_soon' where key = 'timesheet'"))
+        session.commit()
+
+
 def test_the_tool_settings_migration_round_trips_with_rows_present(pg):
     """3d7a1c9e4b20, OPEN-DECISIONS #22: down with a tool switched off, an old
     'view' rule written under the old constraint, then up again — where the

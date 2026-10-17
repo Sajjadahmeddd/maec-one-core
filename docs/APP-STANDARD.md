@@ -163,18 +163,22 @@ answer for your app then carries only that role's keys.
 
 ## 8. Going live — the checklist
 
-1. **Gate secret.** Generate one; add `,<app>=<secret>` to Core's
-   `GATE_SECRETS` and restart Core. Give the same secret to your app.
+1. **Added in Core, and its gate secret.** A Global Admin adds your app on
+   the **Applications** screen (key, name, status, address); that also
+   subscribes the organisation to it. Then, on the server, generate a secret,
+   add `,<app>=<secret>` to Core's `GATE_SECRETS` and restart Core — the
+   screen shows "Gate secret: Yes". Give the same secret to your app. The
+   runbook's "Bringing a new application into MAEC One" has every command.
 2. **Network.** Join the shared Docker network `maec_core_net` (external), and
    call Core at `http://maec-core:8000`. Use **your own subnet** for your
    stack's other networks and **your own host port**, not one already taken
    (Core 8001, Engineering Tools 8082 — check with `sudo ss -ltnp`).
-3. **Address and status.** In Core's database, set your app's `base_url` and
-   `status = 'live'` (the runbook has the exact command). Until then the gate
-   refuses your app.
-4. **Subscription and seats.** The organisation needs a subscription to your
-   app; people need a seat on it (Users) and a role that reaches it (User &
-   Role Access).
+3. **Address and status.** On the Applications screen, your app's address
+   and status **Live**. Until it is live the gate refuses your app (it may
+   still report its features). Retiring it later means status **Inactive** —
+   applications are never deleted.
+4. **Seats.** People need a seat on it (Users) and a role that reaches it
+   (User & Role Access).
 5. **DNS and Caddy.** An A record and a Caddy block for your host, proxying to
    your port.
 6. **Start your app** and watch Tool-Level Settings: your features appear,

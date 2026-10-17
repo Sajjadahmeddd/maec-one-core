@@ -172,7 +172,10 @@ class LoginLock(Base):
 class Application(Base):
     __tablename__ = "applications"
     __table_args__ = (
-        CheckConstraint("status IN ('live','coming_soon')", name="ck_applications_status"),
+        # inactive: an application retired from use — never deleted, since it
+        # has history; the gate refuses it and the launcher leaves it out
+        CheckConstraint("status IN ('live','coming_soon','inactive')",
+                        name="ck_applications_status"),
     )
 
     id: Mapped[uuid.UUID] = _pk()

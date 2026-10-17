@@ -192,11 +192,11 @@ and signs out the sessions minted under the old password. Then unset it.
 .venv/Scripts/python -m pytest
 ```
 
-679 tests. 651 run against an in-memory SQLite; 25 run against the PostgreSQL
+707 tests. 678 run against an in-memory SQLite; 26 run against the PostgreSQL
 in your `.env` and cover what SQLite cannot — column widths, CHECK
 constraints, the append-only trigger, the migrations run up and down with data
 present, real concurrency on single-use authorization codes, and a session
-revoked on one connection being refused on another at once. Those 25 skip
+revoked on one connection being refused on another at once. Those 26 skip
 themselves if no PostgreSQL is configured — a green run with them skipped has
 not tested any of that. Three more run frontend rules under Node, so Node
 must be installed: the sign-in page's `next` allowlist — the open-redirect
@@ -263,6 +263,9 @@ Core names no app's features. Each app reports its own when it starts —
 Tool-Level Settings, New and switched on for Global Admin only, until an
 administrator switches them on per role. What an app must do to join MAEC One,
 including the exact request and answers, is in `docs/APP-STANDARD.md`.
+Applications themselves are added and edited on the admin panel's
+Applications screen; the only server step for a new one is its gate secret
+(RUNBOOK: "Bringing a new application into MAEC One").
 OPEN-DECISIONS #23.
 
 ## The launcher
