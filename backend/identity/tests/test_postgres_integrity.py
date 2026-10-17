@@ -22,9 +22,11 @@ developer's own .env; nothing is hardcoded here.
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select, text
 
 SCRATCH = "maec_pgtest"
@@ -538,6 +540,94 @@ def test_the_account_wide_lock_columns_are_gone(session):
     columns = set(session.scalars(text(
         "select column_name from information_schema.columns where table_name = 'users'")))
     assert not {"failed_login_count", "locked_until"} & columns
+
+
+# ------------------------------------- simultaneous feature reports (Prompt 18)
+RACE_SECRETS = {"racea": "racea-gate-secret-for-tests-0123456789abcdef",
+                "raceb": "raceb-gate-secret-for-tests-0123456789abcdef"}
+
+
+@pytest.fixture
+def racing_apps(pg, monkeypatch):
+    """Two apps Core knows, neither yet reported, each with its gate secret."""
+    from backend.identity.models import Application
+    monkeypatch.setenv("GATE_SECRETS", ",".join(f"{k}={v}" for k, v in RACE_SECRETS.items()))
+    with pg.session_factory()() as session:
+        for key in RACE_SECRETS:
+            if session.scalar(select(Application).where(Application.key == key)) is None:
+                session.add(Application(key=key, name=f"Race {key[-1].upper()}", status="coming_soon"))
+        session.commit()
+
+
+def _report(app_key, features):
+    from backend.main import app
+    caller = TestClient(app, raise_server_exceptions=False)
+    return caller.put("/api/gate/features", json={"app_version": "v1", "features": features},
+                      headers={"X-MAEC-App": app_key, "X-MAEC-Gate-Secret": RACE_SECRETS[app_key]})
+
+
+def test_simultaneous_identical_first_reports_create_everything_once(pg, racing_apps):
+    """Several servers of one app start together and report at the same moment.
+    Each would find the features missing and create them: duplicate rows, a
+    500, an audit row each. Registration takes the app's row lock, so they run
+    one after another — the first creates, the rest find nothing to do."""
+    from backend.identity.models import AuditLog, Feature, Permission, Role, RolePermission
+
+    features = [{"key": f"task{n}", "name": f"Task {n}", "actions": ["use", "view"]}
+                for n in range(1, 6)]
+    barrier, statuses = threading.Barrier(15), []
+
+    def attempt():
+        barrier.wait()
+        statuses.append(_report("racea", features).status_code)
+
+    threads = [threading.Thread(target=attempt) for _ in range(15)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+    assert sorted(statuses) == [200] * 15, statuses
+
+    with pg.session_factory()() as session:
+        app_id = session.scalar(text("select id from applications where key = 'racea'"))
+        assert session.scalar(select(func.count(Feature.id)).where(Feature.application_id == app_id)) == 5
+        permission_ids = session.scalars(select(Permission.id).where(
+            Permission.application_id == app_id)).all()
+        assert len(permission_ids) == 10
+        roles = session.scalar(select(func.count(Role.id)))
+        assert session.scalar(select(func.count()).select_from(RolePermission).where(
+            RolePermission.permission_id.in_(permission_ids))) == 10 * roles
+        assert session.scalar(select(func.count(AuditLog.id)).where(
+            AuditLog.action == "features.register", AuditLog.target_id == "racea")) == 1
+
+
+def test_one_apps_report_never_waits_for_another_apps(pg, racing_apps):
+    """The lock is the app's own row: while one app's report is held, another
+    app's goes straight through — and the held app's next report waits its turn."""
+    import time
+
+    holder = pg.engine().connect()
+    held = holder.begin()
+    holder.execute(text("select id from applications where key = 'raceb' for update"))
+    try:
+        waiting, done = [], threading.Event()
+
+        def report_b():
+            waiting.append(_report("raceb", [{"key": "task1", "name": "B", "actions": ["use"]}]).status_code)
+            done.set()
+
+        behind = threading.Thread(target=report_b)
+        behind.start()
+        started = time.monotonic()
+        r = _report("racea", [{"key": "task9", "name": "A", "actions": ["use"]}])
+        assert r.status_code == 200, r.text
+        assert time.monotonic() - started < 10, "another app's report did not wait"
+        assert not done.wait(timeout=1.5), "the held app's report waits for its lock"
+    finally:
+        held.rollback()
+        holder.close()
+    assert done.wait(timeout=60) and waiting == [200], waiting
+    behind.join(timeout=60)
 
 
 def test_the_tool_settings_migration_round_trips_with_rows_present(pg):

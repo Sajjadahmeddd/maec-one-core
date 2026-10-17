@@ -192,11 +192,11 @@ and signs out the sessions minted under the old password. Then unset it.
 .venv/Scripts/python -m pytest
 ```
 
-661 tests. 635 run against an in-memory SQLite; 23 run against the PostgreSQL
+663 tests. 635 run against an in-memory SQLite; 25 run against the PostgreSQL
 in your `.env` and cover what SQLite cannot — column widths, CHECK
 constraints, the append-only trigger, the migrations run up and down with data
 present, real concurrency on single-use authorization codes, and a session
-revoked on one connection being refused on another at once. Those 23 skip
+revoked on one connection being refused on another at once. Those 25 skip
 themselves if no PostgreSQL is configured — a green run with them skipped has
 not tested any of that. Three more run frontend rules under Node, so Node
 must be installed: the sign-in page's `next` allowlist — the open-redirect

@@ -144,6 +144,17 @@ def register(db: Session, app: Application, version: str | None,
              reported: list[Reported], now: datetime) -> Outcome:
     """Apply a checked report. Writes, flushes, and leaves the commit to the
     caller, so the whole report is one transaction."""
+    # One report at a time per app. Several servers of an app starting together
+    # report at the same moment; each would find a feature missing and create
+    # it — duplicate rows, a 500, an audit row each. Locking the app's own row
+    # for the rest of this transaction makes them run one after another, and
+    # each later one reads what the earlier committed: the first creates, the
+    # rest find nothing to do. Another app locks another row and never waits.
+    # (SQLite, in the unit tests, ignores FOR UPDATE; it serialises writers.)
+    app = db.scalars(select(Application).where(Application.id == app.id)
+                     .with_for_update()
+                     .execution_options(populate_existing=True)).one()
+
     retired = {r.key: r for r in db.scalars(select(RetiredFeature).where(
         RetiredFeature.application_id == app.id)).all()}
     clash = [f for f in reported if f.key in retired]
