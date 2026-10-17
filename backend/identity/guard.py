@@ -99,6 +99,7 @@ ROUTES: dict[str, Access] = {
     # /api/auth, whose rows are PUBLIC for a different reason.
     "/api/gate/check": Access.GATE,
     "/api/gate/features": Access.GATE,
+    "/api/gate/holders": Access.GATE,
 
     # FastAPI's generated documentation describes the admin API, so it is not
     # handed to strangers.

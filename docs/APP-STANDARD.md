@@ -130,6 +130,27 @@ What Core does with it:
   how many features are new or no longer reported. Silence for over 24 hours
   shows in amber.
 
+## 6a. Ask who holds a feature
+
+When your app needs to offer a choice of people — for example a picker of who
+may lead a project — ask Core who holds the feature, rather than keeping your
+own copy of everyone's roles:
+
+```http
+GET /api/gate/holders?key=task2&action=use
+X-MAEC-App: projects
+X-MAEC-Gate-Secret: <your app's gate secret>
+```
+
+| Status | Body | Meaning |
+|---|---|---|
+| `200` | `{"core_user_ids": ["<uuid>", ...]}` | Active people with a seat on your app whose roles — including roles scoped to your app — allow `<app>:<key>:<action>`, decided exactly as the gate decides. Ids only: match them to your own users by the id the gate gives you (`user.id`). |
+| `422` | `{"detail": "..."}` | `key` is not one of **your** app's reported feature keys (another app's key, a key you never reported, a bad key), or `action` is not one it reported. |
+| `403` | `{"reason": "bad_app", ...}` | Wrong app key or secret. |
+
+`action` defaults to `use`. The answer is never cached by Core: switching a
+role off in Tool-Level Settings takes its holders out of the list at once.
+
 ## 7. Your own data rules still apply
 
 Core decides **which sections** a person may open. Your app still decides

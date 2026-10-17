@@ -32,7 +32,7 @@ import logging
 from datetime import timedelta
 from urllib.parse import quote, urlsplit
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from limits import parse
@@ -41,7 +41,7 @@ from sqlalchemy.orm import Session
 
 from . import config, features, security, sessions
 from .db import get_db
-from .models import Application, AuditLog, Permission, User
+from .models import Application, AuditLog, Permission, User, UserLicense
 from .permissions import audit, entitled, load, load_user, organization_active
 from .resolution import covers, now, resolve
 from .router_auth import limiter
@@ -341,3 +341,44 @@ def _register(request: Request, db: Session, app: Application, raw: bytes) -> JS
               commit=False)
     db.commit()
     return JSONResponse(outcome.response(), headers=NO_STORE)
+
+
+# ------------------------------------------------- who holds one of its features
+@router.get("/api/gate/holders")
+def holders(request: Request, db: Session = Depends(get_db),
+            key: str = Query(default="", max_length=120),
+            action: str = Query(default="use", max_length=40)):
+    """Who may use one of the asking app's own features — for an app's own
+    pickers, such as Project Management's choice of a project's lead.
+
+        GET /api/gate/holders?key=<feature key>&action=use
+        X-MAEC-App: projects
+        X-MAEC-Gate-Secret: <the app's gate secret>
+
+    200 {"core_user_ids": [...]}: active people with a seat on this app whose
+    roles — including roles scoped to this app — allow <app>:<key>:<action>,
+    decided by the same engine as the gate. Ids only: no address, no name.
+    422 for a key or action that is not one of this app's, 403 for a caller
+    that cannot prove it is the app. Authenticated exactly as /api/gate/check.
+    """
+    app_key, app, refused = _the_app(request, db, live=True)
+    if refused is not None:
+        return refused
+
+    # Only its own features: the key is a feature key, never a permission key
+    # naming another app, and it must be one this app has registered.
+    if not features.KEY.match(key) or action not in features.ACTIONS:
+        return JSONResponse({"detail": "key must be one of this app's feature keys, and action "
+                                       f"one of {list(features.ACTIONS)}."},
+                            status_code=422, headers=NO_STORE)
+    permission_key = f"{app.key}:{key}:{action}"
+    if db.scalar(select(Permission.id).where(Permission.application_id == app.id,
+                                             Permission.key == permission_key)) is None:
+        return JSONResponse({"detail": f"{app.key} has no feature {key!r} with action "
+                                       f"{action!r}."}, status_code=422, headers=NO_STORE)
+
+    seated = db.scalars(select(User).join(UserLicense, UserLicense.user_id == User.id).where(
+        UserLicense.application_id == app.id, User.status == "active")).all()
+    ids = sorted(str(person.id) for person in seated
+                 if resolve(load(db, person, app.key), permission_key))
+    return JSONResponse({"core_user_ids": ids}, headers=NO_STORE)
