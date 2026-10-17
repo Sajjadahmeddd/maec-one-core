@@ -89,6 +89,8 @@ def pg():
         seed.run(session, admin_email="admin@mirageaec.com",
                  admin_password="Scratch@2026",
                  test_email="engineer@mirageaec.com", test_password="Scratch@2026")
+        import existing_registry
+        existing_registry.install(session)
 
     yield identity_db
 
@@ -586,6 +588,43 @@ def test_the_tool_settings_migration_round_trips_with_rows_present(pg):
         session.commit()
 
 
+def test_the_features_migration_round_trips_with_rows_present(pg):
+    """7b2e5d1f9c40, OPEN-DECISIONS #23: down with a reported feature, a
+    retired key and an app's monitoring fields present, and up again — the
+    permissions and role rules from before reports untouched throughout."""
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import inspect as schema
+
+    cfg = Config(str(REPO / "backend" / "identity" / "alembic.ini"))
+    app = "(select id from applications where key = 'engineering')"
+    with pg.session_factory()() as session:
+        session.execute(text(
+            "insert into features (id, application_id, key, name, is_new, created_at) "
+            f"values (gen_random_uuid(), {app}, 'sheet', 'Sheet', true, now())"))
+        session.execute(text(
+            "insert into retired_features (id, application_id, key, retired_at) "
+            f"values (gen_random_uuid(), {app}, 'oldsheet', now())"))
+        session.execute(text(
+            "update applications set features_reported_at = now(), features_version = 'abc', "
+            "features_report = '{\"total\": 1}' where key = 'engineering'"))
+        session.commit()
+        rules_before = session.scalar(text("select count(*) from role_permissions"))
+        permissions_before = session.scalar(text("select count(*) from permissions"))
+
+    command.downgrade(cfg, "3d7a1c9e4b20")
+    tables = set(schema(pg.engine()).get_table_names())
+    assert not {"features", "retired_features"} & tables
+    columns = {c["name"] for c in schema(pg.engine()).get_columns("applications")}
+    assert not {"features_reported_at", "features_version", "features_report"} & columns
+
+    command.upgrade(cfg, "head")
+    assert {"features", "retired_features"} <= set(schema(pg.engine()).get_table_names())
+    with pg.session_factory()() as session:
+        assert session.scalar(text("select count(*) from role_permissions")) == rules_before
+        assert session.scalar(text("select count(*) from permissions")) == permissions_before
+
+
 def test_the_oidc_migration_round_trips_with_rows_present(pg):
     """Up, down and up again, with rows in the new tables and the old ones —
     so the downgrade is known to work on a database that has been used, not
@@ -600,7 +639,7 @@ def test_the_oidc_migration_round_trips_with_rows_present(pg):
 
     # the OIDC tables, and every table a later revision added on top of them
     oidc_tables = {"signing_keys", "oauth_clients", "authorization_codes", "sessions",
-                   "login_locks", "tool_settings"}
+                   "login_locks", "tool_settings", "features", "retired_features"}
     cfg = Config(str(REPO / "backend" / "identity" / "alembic.ini"))
 
     with pg.session_factory()() as session:

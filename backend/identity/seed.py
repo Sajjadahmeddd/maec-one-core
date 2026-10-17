@@ -14,6 +14,13 @@ Every row is looked up by its natural key before it is created, so a second
 run changes nothing. It is safe to run on every deploy, which is what the
 Render start command does.
 
+It seeds the organisation, the applications themselves (key, name, status),
+the roles, the subscriptions and the first accounts — and no application's
+features. Those are each application's own: it reports them when it starts
+(PUT /api/gate/features, OPEN-DECISIONS #23), and they appear in Tool-Level
+Settings then. The seed never removes or changes anything an app registered,
+or any permission and role rule already in the database.
+
 Existing passwords are LEFT ALONE. Set SEED_RESET_PASSWORDS=1 to re-apply the
 bootstrap password and clear any lockout — the recovery path for a lost or
 locked-out admin account. It is opt-in
@@ -34,8 +41,7 @@ from . import config  # noqa: F401  (loads .env)
 from . import lockout, security, sessions
 from .db import session_factory
 from .models import (
-    Application, Organization, Permission, Role, RolePermission, Subscription,
-    User, UserLicense, UserRole,
+    Application, Organization, Role, Subscription, User, UserLicense, UserRole,
 )
 
 ORG = {"name": "Mirage AEC", "domain": "mirageaec.com"}
@@ -65,32 +71,6 @@ ROLES = [
     ("employee", "Normal User / Engineer", 4,
      "Uses the tools on the projects they are placed on."),
 ]
-
-ENGINEERING_MODULES = ["hapext", "airsizer", "hapaudit", "rebadge"]
-ACTIONS = ["view", "convert", "export", "configure"]
-
-# What each role gets on each module, by default. Explicit denies are real
-# rows, not omissions — so "deny beats allow" has something to bite on.
-#   allow: every action;  deny: named actions denied, the rest allowed
-ROLE_DEFAULTS: dict[str, dict[str, dict[str, str]]] = {
-    "global_admin":   {m: {a: "allow" for a in ACTIONS} for m in ENGINEERING_MODULES},
-    "business_admin": {m: {a: "allow" for a in ACTIONS} for m in ENGINEERING_MODULES},
-    "project_lead":   {m: {**{a: "allow" for a in ACTIONS}, "configure": "deny"}
-                       for m in ENGINEERING_MODULES},
-    "employee": {
-        "hapext":   {"view": "allow", "convert": "allow", "export": "allow", "configure": "deny"},
-        "airsizer": {"view": "allow", "convert": "allow", "export": "allow", "configure": "deny"},
-        "rebadge":  {"view": "allow", "convert": "allow", "export": "allow", "configure": "deny"},
-        "hapaudit": {"view": "allow", "convert": "deny", "export": "deny", "configure": "deny"},
-    },
-}
-
-# Project Management keeps its own roles (Business Head, Engineer, project
-# leads). Core only decides who gets in, so the application has exactly one
-# permission, and every built-in role is allowed it; the seat is what decides.
-PROJECTS_PERMISSIONS = [("app", "use")]
-PROJECTS_ROLE_DEFAULTS = {role: "allow" for role in
-                          ("global_admin", "business_admin", "project_lead", "employee")}
 
 FAR_FUTURE = datetime(2099, 12, 31, tzinfo=timezone.utc)
 
@@ -155,60 +135,10 @@ def run(db: Session, *, admin_email: str, admin_password: str,
             made("roles")
         roles[key] = role
 
-    # -- permissions for engineering
-    engineering = apps["engineering"]
-    permissions: dict[str, Permission] = {}
-    for module in ENGINEERING_MODULES:
-        for action in ACTIONS:
-            key = f"engineering:{module}:{action}"
-            permission = _one(db, Permission, key=key)
-            if permission is None:
-                permission = Permission(
-                    key=key, application_id=engineering.id, module_key=module,
-                    action=action, description=f"{action.title()} in {module}")
-                db.add(permission)
-                db.flush()
-                made("permissions")
-            permissions[key] = permission
-
-    # -- role defaults
-    for role_key, modules in ROLE_DEFAULTS.items():
-        role = roles[role_key]
-        for module, actions in modules.items():
-            for action, effect in actions.items():
-                permission = permissions[f"engineering:{module}:{action}"]
-                rp = _one(db, RolePermission, role_id=role.id, permission_id=permission.id)
-                if rp is None:
-                    db.add(RolePermission(role_id=role.id, permission_id=permission.id,
-                                          effect=effect))
-                    made("role_permissions")
-    db.flush()
-
-    # -- Project Management: one permission, allowed for every built-in role.
-    # The application stays as the seed made it (coming_soon, no base_url):
-    # the person makes it live, at https://pm.mirageaec.com, at deploy time.
-    projects = apps["projects"]
-    for module, action in PROJECTS_PERMISSIONS:
-        key = f"projects:{module}:{action}"
-        permission = _one(db, Permission, key=key)
-        if permission is None:
-            permission = Permission(
-                key=key, application_id=projects.id, module_key=module, action=action,
-                description="Use Project Management")
-            db.add(permission)
-            db.flush()
-            made("permissions")
-        for role_key, effect in PROJECTS_ROLE_DEFAULTS.items():
-            role = roles[role_key]
-            if _one(db, RolePermission, role_id=role.id, permission_id=permission.id) is None:
-                db.add(RolePermission(role_id=role.id, permission_id=permission.id,
-                                      effect=effect))
-                made("role_permissions")
-    db.flush()
-
     # -- the subscriptions: Engineering Tools and Project Management, neither
     # capped (seats NULL). Seats are still per person; there is just no limit
     # on how many the organisation may hand out.
+    engineering, projects = apps["engineering"], apps["projects"]
     for application in (engineering, projects):
         if _one(db, Subscription, org_id=org.id, application_id=application.id) is None:
             db.add(Subscription(org_id=org.id, application_id=application.id,

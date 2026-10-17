@@ -181,6 +181,12 @@ class Application(Base):
     description: Mapped[str | None] = mapped_column(String(300))
     base_url: Mapped[str | None] = mapped_column(String(500))
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="coming_soon")
+    # Monitoring, from the app's own feature reports (PUT /api/gate/features):
+    # when it last reported, the version it said it was, and what that report
+    # did — {"registered", "new", "not_reported"}. Null until it first reports.
+    features_reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    features_version: Mapped[str | None] = mapped_column(String(64))
+    features_report: Mapped[dict | None] = mapped_column(JSON)
 
 
 class Subscription(Base):
@@ -261,6 +267,48 @@ class Permission(Base):
     module_key: Mapped[str] = mapped_column(String(40), nullable=False)
     action: Mapped[str] = mapped_column(String(40), nullable=False)
     description: Mapped[str | None] = mapped_column(String(300))
+
+
+class Feature(Base):
+    """A feature (or section) of an application, as the application reports
+    it: its permanent key, the name to show, and two marks for the panel.
+    Its permissions are the `permissions` rows `<app>:<key>:<action>`.
+
+    Core's code names no feature of any application; every row here came
+    from an app's report (or from before reports, OPEN-DECISIONS #23)."""
+    __tablename__ = "features"
+    __table_args__ = (
+        UniqueConstraint("application_id", "key", name="uq_features_app_key"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("applications.id", ondelete="CASCADE"), nullable=False, index=True)
+    key: Mapped[str] = mapped_column(String(40), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    # until an administrator first changes any rule on it
+    is_new: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # set when the app's report leaves it out; cleared when it is reported again
+    not_reported_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created()
+
+
+class RetiredFeature(Base):
+    """A feature key an administrator removed. A key is permanent: once
+    retired it is refused if an app reports it again."""
+    __tablename__ = "retired_features"
+    __table_args__ = (
+        UniqueConstraint("application_id", "key", name="uq_retired_features_app_key"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("applications.id", ondelete="CASCADE"), nullable=False, index=True)
+    key: Mapped[str] = mapped_column(String(40), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(120))
+    retired_at: Mapped[datetime] = _created()
+    retired_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"))
 
 
 class RolePermission(Base):

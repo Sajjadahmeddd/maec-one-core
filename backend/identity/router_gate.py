@@ -27,17 +27,19 @@ server, and a Set-Cookie on it would be noise at best.
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 from datetime import timedelta
 from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from limits import parse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import config, security, sessions
+from . import config, features, security, sessions
 from .db import get_db
 from .models import Application, AuditLog, Permission, User
 from .permissions import audit, entitled, load, load_user, organization_active
@@ -198,27 +200,39 @@ def permitted(data, app: Application, db: Session) -> tuple[list[str], list[str]
     return allowed, nav_hidden
 
 
-# -------------------------------------------------------------------- route
-@router.get("/api/gate/check")
-def check(request: Request, db: Session = Depends(get_db)):
+def _the_app(request: Request, db: Session, *, live: bool
+             ) -> tuple[str, Application | None, JSONResponse | None]:
+    """Step 1 of every gate route: the caller is that app's server, because it
+    knows the app's secret — compared in constant time, against a stand-in
+    when the app has none — and the app exists (and, for `live`, is live).
+    Returns the app, or the refusal to send. A wrong secret counts towards the
+    per-address limit and is audited; a right one never is."""
     app_key = request.headers.get(APP_HEADER, "").strip()
-
-    # 1. The caller is that app's server: it knows the app's secret. Compared
-    #    in constant time, against a stand-in when the app has none.
     expected = config.gate_secrets().get(app_key, _NO_SECRET)
     supplied = request.headers.get(SECRET_HEADER, "")
     secret_ok = (hmac.compare_digest(expected.encode(), supplied.encode())
                  and expected != _NO_SECRET)
     app = db.scalar(select(Application).where(Application.key == app_key)) if app_key else None
-    if not secret_ok or app is None or app.status != "live":
+    if not secret_ok or app is None or (live and app.status != "live"):
         if not secret_ok:
             if _too_many_failures(request):
                 log.info("gate: too many failed calls from one address (app %r)",
                          app_key[:40])
-                return JSONResponse({"reason": "too_many_failures"}, status_code=429,
-                                    headers={**NO_STORE, "Retry-After": "60"})
+                return app_key, None, JSONResponse(
+                    {"reason": "too_many_failures"}, status_code=429,
+                    headers={**NO_STORE, "Retry-After": "60"})
             _audit_bad_call(db, request, "gate.bad_secret", app_key, app)
-        return _refuse(request, 403, "bad_app", app_key)
+        return app_key, None, _refuse(request, 403, "bad_app", app_key)
+    return app_key, app, None
+
+
+# -------------------------------------------------------------------- route
+@router.get("/api/gate/check")
+def check(request: Request, db: Session = Depends(get_db)):
+    # 1. The caller is that app's server, and the app is live.
+    app_key, app, refused = _the_app(request, db, live=True)
+    if refused is not None:
+        return refused
 
     # 2. Request forgery. Sibling subdomains are same-site, so the cookie rides
     #    along on a form a page elsewhere under the domain posts to this app.
@@ -270,3 +284,60 @@ def check(request: Request, db: Session = Depends(get_db)):
         "permissions": allowed,
         "nav_hidden": nav_hidden,
     }, headers=NO_STORE)
+
+
+# ------------------------------------------------------- the app's features
+@router.put("/api/gate/features")
+async def register_features(request: Request, db: Session = Depends(get_db)):
+    """An app tells Core its features, when it starts. OPEN-DECISIONS #23.
+
+    Authenticated exactly as /api/gate/check — the app's key and its secret —
+    except that the app need not be live yet: it reports before it opens.
+    The body is read only after the caller has proved itself.
+
+        PUT /api/gate/features
+        X-MAEC-App: engineering
+        X-MAEC-Gate-Secret: <the app's gate secret>
+        {"app_version": "93e6aee",
+         "features": [{"key": "<key>", "name": "<name>", "actions": ["use"]}]}
+
+    200 {"registered": N, "new": M, "not_reported": K}; 422 {"detail": why}
+    for a report refused as a whole; 403 {"reason": "bad_app"} for a caller
+    that cannot prove it is the app.
+    """
+    app_key, app, refused = await run_in_threadpool(_the_app, request, db, live=False)
+    if refused is not None:
+        return refused
+    raw = await request.body()
+    return await run_in_threadpool(_register, request, db, app, raw)
+
+
+def _register(request: Request, db: Session, app: Application, raw: bytes) -> JSONResponse:
+    if len(raw) > features.MAX_BODY:
+        return JSONResponse({"detail": f"The report is larger than {features.MAX_BODY} bytes."},
+                            status_code=413, headers=NO_STORE)
+    try:
+        body = json.loads(raw or b"null")
+    except ValueError:
+        return JSONResponse({"detail": "The body is not valid JSON."}, status_code=422,
+                            headers=NO_STORE)
+    try:
+        version, reported = features.parse(body, app.key)
+        outcome = features.register(db, app, version, reported, now())
+    except features.ReportError as exc:
+        db.rollback()
+        log.info("gate: feature report from %r refused: %s", app.key, str(exc)[:200])
+        return JSONResponse({"detail": str(exc)}, status_code=422, headers=NO_STORE)
+
+    if outcome.changed:
+        audit(db, actor_email=f"({app.key} app)", action="features.register",
+              target_type="application", target_id=app.key, application_id=app.id,
+              source="gate", result="success", request=request,
+              after={"app_version": app.features_version, "registered": outcome.registered,
+                     "new": outcome.new[:50], "new_actions": outcome.new_actions[:50],
+                     "renamed": outcome.renamed[:50], "reported_again": outcome.back[:50],
+                     "not_reported": outcome.gone_quiet[:50],
+                     "counts": app.features_report},
+              commit=False)
+    db.commit()
+    return JSONResponse(outcome.response(), headers=NO_STORE)

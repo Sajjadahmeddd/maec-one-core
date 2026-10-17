@@ -52,6 +52,7 @@ from sqlalchemy.orm import Session  # noqa: E402
 from backend.identity import db as identity_db  # noqa: E402
 from backend.identity import router_auth, seed  # noqa: E402
 from backend.identity.models import Base  # noqa: E402
+import existing_registry  # noqa: E402
 
 ADMIN_EMAIL = "admin@mirageaec.com"
 ADMIN_PASSWORD = "Correct-Horse-Battery-1"
@@ -77,6 +78,8 @@ def identity():
     with identity_db.session_factory()() as session:
         seed.run(session, admin_email=ADMIN_EMAIL, admin_password=ADMIN_PASSWORD,
                  test_email=ENGINEER_EMAIL, test_password=ENGINEER_PASSWORD)
+        # the registry as production holds it from before apps reported (#23)
+        existing_registry.install(session)
     yield engine
     Base.metadata.drop_all(engine)
 

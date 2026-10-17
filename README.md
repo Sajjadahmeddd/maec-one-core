@@ -192,11 +192,11 @@ and signs out the sessions minted under the old password. Then unset it.
 .venv/Scripts/python -m pytest
 ```
 
-614 tests. 589 run against an in-memory SQLite; 22 run against the PostgreSQL
+658 tests. 632 run against an in-memory SQLite; 23 run against the PostgreSQL
 in your `.env` and cover what SQLite cannot — column widths, CHECK
 constraints, the append-only trigger, the migrations run up and down with data
 present, real concurrency on single-use authorization codes, and a session
-revoked on one connection being refused on another at once. Those 22 skip
+revoked on one connection being refused on another at once. Those 23 skip
 themselves if no PostgreSQL is configured — a green run with them skipped has
 not tested any of that. Three more run frontend rules under Node, so Node
 must be installed: the sign-in page's `next` allowlist — the open-redirect
@@ -256,6 +256,15 @@ for everyone. Anyone signed in changes theirs there — the current password,
 then the new one; every other session they hold is signed out — and lands on
 the launcher. Someone not signed in signs in first and comes back to it.
 
+## An app's features
+
+Core names no app's features. Each app reports its own when it starts —
+`PUT /api/gate/features`, with its gate key and secret — and they appear in
+Tool-Level Settings, New and switched on for Global Admin only, until an
+administrator switches them on per role. What an app must do to join MAEC One,
+including the exact request and answers, is in `docs/APP-STANDARD.md`.
+OPEN-DECISIONS #23.
+
 ## The launcher
 
 Everyone lands on the launcher — a Global Admin too — after signing in, and
@@ -287,7 +296,7 @@ straight in.
 - `EXTRACTION-LOG.md` — what separating this from the product actually took,
   and what the boundary did not cover. Read this first if you are wondering
   why something is the way it is.
-- `OPEN-DECISIONS.md` — twenty-two entries, each with enough context to settle
+- `OPEN-DECISIONS.md` — twenty-three entries, each with enough context to settle
   or revisit it without re-deriving the argument. #19 is how apps sign in
   (read it first), #5 revocable sessions, #6 client addresses behind a proxy,
   #20 every rate limit and the lockout. #11 and #15–#18 are the dormant OIDC

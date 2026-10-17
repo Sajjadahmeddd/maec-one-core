@@ -267,7 +267,7 @@ app.include_router(router_gate.router)
 async def health():
     """Readiness for THIS service.
 
-    The original checked that the HAP mapping and the AirSizer catalogs
+    The original checked that the product's mapping and catalog files
     parsed, which was Engineering Tools' readiness reported by a shared
     process. Core has no catalogs; what it needs is a reachable database,
     so that is what it reports. See EXTRACTION-LOG.md, finding 2.

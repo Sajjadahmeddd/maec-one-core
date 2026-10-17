@@ -1,6 +1,6 @@
 """The permission engine, as Core runs it: from rows.
 
-    can(db, user, "engineering:hapext:convert", scope=("project", "P-2291"))
+    can(db, user, "<app>:<feature>:<action>", scope=("project", "P-2291"))
 
 `can()` loads everything a decision reads (`load`) and hands it to
 `resolution.resolve`, which runs the five steps — entitlement, collect roles,
@@ -295,7 +295,7 @@ def require_global_admin(request: Request, user: User = Depends(require_user),
 def require_permission(permission_key: str, scope: tuple[str, str | None] | None = None):
     """A dependency that refuses unless `can()` says yes.
 
-        @router.post("/convert", dependencies=[require_permission("engineering:hapext:convert")])
+        @router.post("/convert", dependencies=[require_permission("<app>:<feature>:convert")])
     """
     def dependency(request: Request, user: User = Depends(require_user),
                    db: Session = Depends(get_db)) -> User:

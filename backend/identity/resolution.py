@@ -1,6 +1,6 @@
 """The permission resolution — steps 1 to 5, and nothing that touches a database.
 
-    resolve(data, "engineering:hapext:convert", scope=("project", "P-2291"))
+    resolve(data, "<app>:<feature>:<action>", scope=("project", "P-2291"))
 
 `data` is a `ResolutionInput`: everything the decision reads, gathered in
 advance. Core builds one from rows (`permissions.load`); a product builds one
@@ -26,7 +26,7 @@ from typing import Any
 # can quote, so it says which contract each side believes it implements. Bump it
 # only when what resolve(), to_claims() or from_claims() decide or produce
 # changes — never for a comment or a rename.
-RESOLUTION_CONTRACT = "2"
+RESOLUTION_CONTRACT = "3"
 
 log = logging.getLogger("maec.identity")
 
@@ -56,14 +56,15 @@ def fail_closed(where: str, exc: BaseException) -> None:
 # Higher number: more specific. Most specific wins.
 SPECIFICITY = {"platform": 1, "organization": 2, "application": 3, "project": 4}
 
-# The Tool-Level Settings grid (OPEN-DECISIONS #22): for one role and one
-# module, Full Access or No Access — who may open a tool. What they may do
-# inside it is still the role's: a cell can only take a tool away, never add
-# an action the role does not allow. Two levels, no more:
+# The Tool-Level Settings grid (OPEN-DECISIONS #22, #23): for one role and one
+# module (an app's feature), Full Access or No Access. Two levels, no more:
 #
-#   full       the role's own permissions apply, unchanged. The write path
-#              refuses it for a role that allows nothing in the module, so a
-#              cell never claims access that does not exist.
+#   full       if the role allows anything in the module, its own permissions
+#              apply unchanged — what it may do inside stays the role's. If the
+#              role allows nothing there (every feature an app has just
+#              reported starts that way for all but Global Admin), Full Access
+#              allows every registered action of the module: switching a new
+#              feature on for a role is what the grid is for.
 #   no_access  every action of the module is refused. The boundary.
 #
 # A tool the organisation has switched off (Status: Inactive) is refused for
@@ -142,6 +143,13 @@ class ResolutionInput:
     inactive_modules: frozenset[str] = frozenset()
 
 
+def _allows_any(data: ResolutionInput, role_id: str, module_key: str) -> bool:
+    """Does this role allow any action of this module?"""
+    prefix = f"{data.app_key}:{module_key}:"
+    return any(effect == "allow" for (role, key), effect in data.role_permissions.items()
+               if role == role_id and key.startswith(prefix))
+
+
 def covers(grant: Grant, org_id: str, app_key: str,
            requested: tuple[str, str | None]) -> bool:
     """Does this grant's scope reach the requested one?
@@ -202,10 +210,14 @@ def resolve(data: ResolutionInput, permission_key: str,
             return False
 
         # 4. resolve: most specific wins; deny beats allow on a tie. Only a
-        # grant whose role says something about this permission takes part.
+        # grant whose role says something about this permission takes part —
+        # or one the grid has switched on: Full Access on a role that allows
+        # nothing in this module allows it.
         matches: list[tuple[int, str, Grant]] = []
         for grant in grants:
             effect = data.role_permissions.get((grant.role_id, permission_key))
+            if data.tool_rules.get((module_key, grant.role_id)) == "full"                     and not _allows_any(data, grant.role_id, module_key):
+                effect = "allow"
             if effect is not None:
                 matches.append((SPECIFICITY[grant.scope_type], effect, grant))
         if not matches:

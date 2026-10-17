@@ -1142,3 +1142,52 @@ Core immediately.
 screen (an "IT Ticketing" row, or Project Management split into BU Head /
 Lead / User rows). Tools still come only from the seed's registry. When it is
 done, each app must read the new permission from the gate to enforce it.
+
+## 23. Apps tell Core their features; Core names none — decided
+
+**Status:** decided in Prompt 18 (the manager's design). Migration
+`7b2e5d1f9c40`, engine contract 3. The standard every app follows is
+`docs/APP-STANDARD.md`.
+
+**Before:** Core knew an app's features only because the seed listed them
+(`ENGINEERING_MODULES`, `ACTIONS`, Project Management's one permission). A new
+feature meant a Core release.
+
+**Now:**
+
+* **Each app reports its own features** when it starts:
+  `PUT /api/gate/features`, authenticated exactly as `/api/gate/check` (its key
+  and secret; the app need not be live yet). The whole report is checked and
+  applied in one transaction, or refused whole with a reason (422).
+* **Keys** are `[a-z][a-z0-9_]{0,39}`, new ones `task<number>`, permanent: never
+  renamed, never reused. A removed feature's key is retired and refused for
+  ever. The name is display text. Actions: `use`, `view`, `convert`, `export`,
+  `configure`.
+* **A new feature or action** is created allowed for Global Admin only and
+  denied for every other role, built-in or custom, and marked New until an
+  administrator first changes a rule on it (grid, status, or role editor).
+* **A known feature** keeps every rule; only its name follows the report.
+* **A feature no longer reported** is never deleted, only marked; an
+  administrator may then remove it (Tool-Level Settings), which deletes its
+  permissions and rules and retires the key. Audited `features.remove`.
+* **Monitoring:** each app's last report time, version and counts are stored
+  and shown above its rows; over 24 hours of silence shows in amber.
+* **Audit:** one `features.register` row per report that changed something
+  (a platform event — no organisation); none for a repeat.
+* **The seed names no feature** of any app. Rows already in the database stay
+  exactly as they were; when an app first reports them they are "existing",
+  not new, so nobody loses access. A test fails if any app's feature key
+  appears in Core's code outside the tests.
+
+**What changed in the engine (contract 3), and why.** New features start
+denied to every role but Global Admin, and the built-in roles are read-only —
+so under #22 ("Full Access never grants") no built-in role could ever be given
+a new feature. Now Full Access in the grid, on a role that allows **nothing**
+in a feature, allows every action of it. Where a role allows something, its own
+rules still decide inside, exactly as #22: an engineer with Full Access to an
+Engineering Tools feature still may not configure it. No Access and Inactive
+are unchanged. The write path no longer refuses Full Access on such a role.
+
+**Not done here:** Engineering Tools reporting its features (Prompt 18 Part B)
+and Project Management (Prompt 19). Until each app reports, its existing rows
+show under their keys, with no monitoring line.

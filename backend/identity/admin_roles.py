@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from . import features
 from .db import get_db
 from .models import Permission, Role, RolePermission, User, UserRole
 from .permissions import (
@@ -75,7 +76,7 @@ def _summarise(effects: dict[str, str], module: str, actions: list[str]) -> str:
     The Figma names badges the model has no concept of (Personal Load,
     Capacity View). These four are what the data can actually support.
 
-    `module` is qualified by its application ("engineering:hapext") and
+    `module` is qualified by its application ("<app>:<feature>") and
     `actions` are the ones THAT module has. Judged against every action in the
     registry, a module from one application could never be "full" once another
     application brought an action it lacks.
@@ -115,7 +116,7 @@ def _role_json(db: Session, role: Role, registry: list[Permission],
 def _registry_shape(registry: list[Permission]
                     ) -> tuple[list[str], list[str], dict[str, list[str]]]:
     """The grid's shape, from the registry: modules qualified by their
-    application ("engineering:hapext", "projects:app"), every action in use,
+    application ("<app>:<feature>"), every action in use,
     and which actions each module actually has. Module names are only unique
     within an application, so they are never shown or keyed without it."""
     modules: list[str] = []
@@ -235,7 +236,7 @@ def list_roles(db: Session = Depends(get_db),
 
     return {
         "roles": [_role_json(db, r, registry, holders) for r in roles],
-        # qualified: "engineering:hapext". A permission key is module + ":" + action.
+        # qualified: "<app>:<feature>". A permission key is module + ":" + action.
         "modules": modules,
         "actions": actions,
         "module_actions": module_actions,
@@ -341,6 +342,8 @@ def patch_role(role_id: uuid.UUID, body: RolePatch, request: Request,
         else:
             existing.effect = change.effect
         applied[change.key] = change.effect
+        # a rule changed on this feature: it is no longer New
+        features.reviewed(db, permission.application_id, [permission.module_key])
 
     db.flush()
     affected = _bump_holders(db, role)

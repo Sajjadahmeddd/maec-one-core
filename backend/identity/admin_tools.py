@@ -1,26 +1,26 @@
 """Screen 002 — Tool-Level Settings.
 
-The grid: one row per tool (an application's module), one column per role, and
-in each cell Full Access or No Access for this organisation — who may open the
-tool. Plus a Status per tool: Active, or Inactive — switched off for everyone.
-OPEN-DECISIONS #22.
+The grid: one row per feature an application has reported (a module), one
+column per role, and in each cell Full Access or No Access for this
+organisation. Plus a Status per feature: Active, or Inactive — switched off for
+everyone. OPEN-DECISIONS #22, #23.
 
-**The grid says who may open a tool; the role says what they may do in it.**
-No Access takes the whole tool away from a role. Full Access leaves the role's
-own permissions to apply unchanged — an engineer with Full Access to HAPExt
-still may not configure it, because the employee role does not allow that.
-Applications that restrict people by their own roles (Project Management)
-need nothing more; Engineering Tools enforces the role's actions as Core
-sends them through the gate.
+**The features are the apps'.** Core's code names none: each app reports its
+own (PUT /api/gate/features, features.py) and its rows appear here, marked New
+until an administrator first changes a rule on them. A feature an app no longer
+reports is marked so, and only then can it be removed here — which retires its
+key for good.
 
-**A cell never claims access that does not exist.** Full Access for a role
-that allows nothing in the tool would open nothing, so the write is refused —
-audited — rather than stored. A cell nobody has set shows what the role says:
-Full Access when it allows anything in the tool, else No Access.
+**Full Access and No Access.** No Access takes the feature away from a role.
+Full Access leaves the role's own permissions to apply where the role allows
+anything in the feature — what they may do inside stays the role's — and,
+where the role allows nothing (every new feature, for all but Global Admin),
+switches the whole feature on. A cell nobody has set shows what the role says:
+Full Access when it allows anything in the feature, else No Access.
 
-**Inactive is the boundary for everyone.** Every action of an inactive tool is
-refused for every person in the organisation, Global Admins included; the
-gate refuses an application in which nothing is left to use.
+**Inactive is the boundary for everyone.** Every action of an inactive feature
+is refused for every person in the organisation, Global Admins included; the
+gate refuses an application in which the grid leaves someone nothing.
 """
 
 from __future__ import annotations
@@ -32,13 +32,14 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import features
 from .db import get_db
 from .models import (
-    Application, Permission, Role, RolePermission, ToolRule, ToolSetting, User,
-    UserRole,
+    Application, Feature, Permission, Role, RolePermission, ToolRule, ToolSetting,
+    User, UserRole,
 )
 from .permissions import (
-    LEVELS, audit, bump_permissions_version, require_global_admin,
+    LEVELS, audit, bump_permissions_version, now, require_global_admin,
 )
 
 # Global Admin on the prefix is the floor: every route added here
@@ -97,16 +98,6 @@ def _tool(db: Session, application_key: str, module_key: str) -> Application:
     return app
 
 
-def _role_allows_any(db: Session, role: Role, app: Application, module_key: str) -> bool:
-    """Does this role allow anything at all in this tool?"""
-    return db.scalar(
-        select(RolePermission.role_id)
-        .join(Permission, Permission.id == RolePermission.permission_id)
-        .where(RolePermission.role_id == role.id, RolePermission.effect == "allow",
-               Permission.application_id == app.id,
-               Permission.module_key == module_key).limit(1)) is not None
-
-
 def _org_people(db: Session, org_id: uuid.UUID, role_id: uuid.UUID | None = None) -> set:
     """Who re-resolves after a change: the holders of one role, or everyone in
     the organisation who holds any role."""
@@ -121,11 +112,12 @@ def _org_people(db: Session, org_id: uuid.UUID, role_id: uuid.UUID | None = None
 @router.get("/tool-rules")
 def list_tool_rules(db: Session = Depends(get_db),
                     actor: User = Depends(require_global_admin)):
-    """The grid: every tool, every role, and what each cell is.
+    """The grid: every feature, every role, and what each cell is.
 
-    Tools come from the seeded permission registry, not from a list in this
-    file. Each cell is "full" or "no_access" — the grid's setting where there
-    is one (`set: true`), else whether the role allows anything in the tool.
+    Features come from the registry the apps report into, never from a list in
+    this file. Each cell is "full" or "no_access" — the grid's setting where
+    there is one (`set: true`), else whether the role allows anything in it.
+    `applications` is the monitoring line above each app's rows.
     """
     registry = db.scalars(select(Permission).order_by(
         Permission.module_key, Permission.action)).all()
@@ -133,6 +125,7 @@ def list_tool_rules(db: Session = Depends(get_db),
     settings = {(s.application_id, s.module_key): s.status
                 for s in db.scalars(select(ToolSetting).where(
                     ToolSetting.org_id == actor.org_id)).all()}
+    reported = {(f.application_id, f.key): f for f in db.scalars(select(Feature)).all()}
 
     modules: list[dict] = []
     seen: set[tuple[str, str]] = set()
@@ -141,12 +134,36 @@ def list_tool_rules(db: Session = Depends(get_db),
         if app is None or (app.key, p.module_key) in seen:
             continue
         seen.add((app.key, p.module_key))
+        feature = reported.get((app.id, p.module_key))
         modules.append({"application_key": app.key, "application_name": app.name,
                         # live or coming_soon: the application's own state
                         "application_status": app.status,
                         "module_key": p.module_key,
+                        # the name the app gave it; the key until it reports
+                        "name": feature.name if feature else p.module_key,
+                        "is_new": bool(feature and feature.is_new),
+                        "not_reported_since": (feature.not_reported_since.isoformat()
+                                               if feature and feature.not_reported_since
+                                               else None),
                         # the Status column: this organisation's switch
                         "status": settings.get((app.id, p.module_key), "active")})
+    modules.sort(key=lambda m: (m["application_name"], m["name"].lower(), m["module_key"]))
+
+    # one line per application with features: when it last reported, and what
+    applications = []
+    for app in sorted(apps.values(), key=lambda a: a.name):
+        mine = [m for m in modules if m["application_key"] == app.key]
+        if not mine and app.features_reported_at is None:
+            continue
+        applications.append({
+            "key": app.key, "name": app.name, "status": app.status,
+            "reported_at": (app.features_reported_at.isoformat()
+                            if app.features_reported_at else None),
+            "version": app.features_version,
+            "features": len(mine),
+            "new": sum(1 for m in mine if m["is_new"]),
+            "not_reported": sum(1 for m in mine if m["not_reported_since"]),
+        })
 
     roles = db.scalars(select(Role).where(
         (Role.org_id.is_(None)) | (Role.org_id == actor.org_id)
@@ -180,6 +197,7 @@ def list_tool_rules(db: Session = Depends(get_db),
 
     return {
         "modules": modules,
+        "applications": applications,
         "roles": [{"id": str(r.id), "key": r.key, "name": r.name, "level": r.level}
                   for r in roles],
         "cells": cells,
@@ -200,10 +218,9 @@ def put_tool_rules(body: ToolRulesPut, request: Request,
                    actor: User = Depends(require_global_admin)):
     """Set cells of the grid. Any unknown target rejects the whole set.
 
-    Two passes: every change is resolved and checked first, writing nothing,
-    and only a set with no rejection is written — then committed once. A
-    refusal is audited with its own commit, which is why nothing is written
-    before every change has passed. OPEN-DECISIONS #13.
+    Two passes: every change is resolved first, writing nothing, and only a
+    set with nothing unknown in it is written — then committed once.
+    OPEN-DECISIONS #13. A feature a rule is set on is no longer New.
     """
     # ---- pass 1: resolve and check. Nothing is written in this pass.
     planned: list[tuple[ToolRuleChange, Application, Role]] = []
@@ -215,28 +232,6 @@ def put_tool_rules(body: ToolRulesPut, request: Request,
         if role.org_id is not None and role.org_id != actor.org_id:
             raise HTTPException(status_code=404, detail="No such role.")
         planned.append((change, app, role))
-
-    # Full Access opens the tool with the role's own actions. A role that
-    # allows nothing in it would be shown Full Access and open nothing.
-    empty = [(change, app, role) for change, app, role in planned
-             if change.access_level == "full"
-             and not _role_allows_any(db, role, app, change.module_key)]
-    if empty:
-        for change, app, role in empty:
-            audit(db, actor=actor, action="tool_rule.set", target_type="tool_rule",
-                  target_id=f"{app.key}:{change.module_key}:{role.key}",
-                  result="blocked", request=request, org_id=actor.org_id,
-                  after={"access_level": "full",
-                         "reason": "the role allows nothing in this tool"},
-                  commit=False)
-        db.commit()          # the refusal rows and nothing else
-        names = "; ".join(f"{role.name} on {app.name} - {change.module_key}"
-                          for change, app, role in empty)
-        raise HTTPException(
-            status_code=409,
-            detail=(f"Full Access would open nothing: {names}. The role allows "
-                    f"nothing in that tool. Give the role permissions on User & "
-                    f"Role Access first. Nothing in this set was applied."))
 
     # ---- pass 2: write them all, commit once.
     applied, affected_users = [], set()
@@ -261,6 +256,7 @@ def put_tool_rules(body: ToolRulesPut, request: Request,
             existing.updated_by = actor.id
         applied.append({"application": app.key, "module": change.module_key,
                         "role": role.key, "access_level": change.access_level})
+        features.reviewed(db, app.id, [change.module_key])
 
         # Clearing a cell changes access as surely as setting one, so its
         # holders are bumped either way: under the token design this version
@@ -298,6 +294,7 @@ def put_tool_status(body: ToolStatusPut, request: Request,
     else:
         setting.status = body.status
         setting.updated_by = actor.id
+    features.reviewed(db, app.id, [body.module_key])
     db.flush()
 
     # everyone in the organisation: a switched-off tool is off for every role
@@ -315,3 +312,34 @@ def put_tool_status(body: ToolStatusPut, request: Request,
     db.commit()
     return {"application_key": app.key, "module_key": body.module_key,
             "status": body.status, "users_affected": len(affected)}
+
+
+@router.delete("/features/{application_key}/{feature_key}")
+def remove_feature(application_key: str, feature_key: str, request: Request,
+                   db: Session = Depends(get_db),
+                   actor: User = Depends(require_global_admin)):
+    """Remove a feature its app no longer reports, and retire its key.
+
+    Deletes its permissions, every role rule and grid setting on it. The key
+    is recorded as retired: an app reporting it again is refused, because a
+    key is permanent and must never come back meaning something else.
+    """
+    app = db.scalar(select(Application).where(Application.key == application_key))
+    if app is None:
+        raise HTTPException(status_code=404, detail=f"Unknown application {application_key!r}.")
+    try:
+        gone = features.remove(db, app, feature_key, actor.id, now())
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    audit(db, actor=actor, action="features.remove", target_type="application",
+          target_id=app.key, application_id=app.id, result="success", request=request,
+          org_id=actor.org_id,
+          before={"feature": gone.key, "name": gone.name,
+                  "not_reported_since": gone.not_reported_since.isoformat()
+                  if gone.not_reported_since else None},
+          after={"retired": True}, commit=False)
+    db.commit()
+    return {"application_key": app.key, "feature_key": feature_key, "retired": True}

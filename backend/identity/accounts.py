@@ -132,9 +132,9 @@ def may_grant(db: Session, *, actor: User, target_org_id, role: Role,
         # Only what this grant can actually confer. A grant scoped to one
         # application reaches no other application's permissions —
         # resolution.covers() ignores it there — so holding those is not the
-        # actor's business. Without this, adding Project Management's
-        # projects:app:use to Employee stopped an Engineering Tools lead
-        # granting Employee for Engineering Tools.
+        # actor's business. Without this, adding one application's
+        # permission to Employee stopped another application's lead
+        # granting Employee for their own application.
         if scope_type == "application" and app_of(rp.permission.key) != scope_id:
             continue
         if not can(db, actor, rp.permission.key, probe):

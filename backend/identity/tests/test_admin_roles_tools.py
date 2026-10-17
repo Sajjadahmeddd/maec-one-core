@@ -204,24 +204,26 @@ def test_each_cell_is_reported_as_it_is_enforced(admin_client, db):
         "access_level": "no_access", "set": True}
 
 
-def test_full_access_on_a_role_that_allows_nothing_is_refused(admin_client, db):
-    """A cell never claims access that does not exist: Full Access for a role
-    with no permissions in the tool would open nothing, so it is refused,
-    audited, and nothing is stored."""
+def test_full_access_switches_a_feature_on_for_a_role_that_had_nothing(admin_client, db):
+    """OPEN-DECISIONS #23: a role that allows nothing in a feature — every new
+    feature, for all but Global Admin — is given the whole feature by Full
+    Access. (Under #22 this was refused; with features arriving switched off,
+    that left no way to switch one on for a built-in role.)"""
     it_admin = Role(key="it_admin", name="IT Admin", level=4, is_custom=True,
                     org_id=db_user(db, ADMIN_EMAIL).org_id)
     db.add(it_admin)
     db.commit()
-    r = _put(admin_client, "hapext", it_admin, "full")
-    assert r.status_code == 409
-    assert "would open nothing" in r.json()["detail"]
-    assert "User & Role Access" in r.json()["detail"]
+    engineer = _engineer_holds(db, it_admin)
+    assert can(db, engineer, "engineering:hapext:view") is False
+
+    assert _put(admin_client, "hapext", it_admin, "full").status_code == 200
     db.expire_all()
-    assert db.scalar(select(ToolRule)) is None
-    row = db.scalar(select(AuditLog).where(AuditLog.action == "tool_rule.set"))
-    assert (row.result, row.target_id) == ("blocked", "engineering:hapext:it_admin")
-    # No Access on it is fine: it takes away nothing, and says so
+    engineer = db_user(db, ENGINEER_EMAIL)
+    for action in ("view", "convert", "export", "configure"):
+        assert can(db, engineer, f"engineering:hapext:{action}") is True, action
+    assert can(db, engineer, "engineering:airsizer:view") is False, "only that feature"
     assert _put(admin_client, "hapext", it_admin, "no_access").status_code == 200
+    assert can(db, db_user(db, ENGINEER_EMAIL), "engineering:hapext:view") is False
 
 
 def test_no_access_refuses_every_action_of_that_tool(admin_client, db):
@@ -401,9 +403,10 @@ def test_clearing_a_rule_bumps_the_holders_too(admin_client, db):
 
 def test_the_matrix_lists_the_real_modules(admin_client):
     body = admin_client.get(TOOLS).json()
+    # by application, then by the feature's name (its key until it reports)
     assert [(m["application_key"], m["module_key"]) for m in body["modules"]] == [
-        ("engineering", "airsizer"), ("projects", "app"), ("engineering", "hapaudit"),
-        ("engineering", "hapext"), ("engineering", "rebadge")]
+        ("engineering", "airsizer"), ("engineering", "hapaudit"),
+        ("engineering", "hapext"), ("engineering", "rebadge"), ("projects", "app")]
     assert [lvl["key"] for lvl in body["levels"]] == ["full", "no_access"]
     assert [s["key"] for s in body["statuses"]] == ["active", "inactive"]
 

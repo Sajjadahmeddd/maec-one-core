@@ -98,6 +98,7 @@ ROUTES: dict[str, Access] = {
     # The gate: an app's server asking whether a browser may come in. Not under
     # /api/auth, whose rows are PUBLIC for a different reason.
     "/api/gate/check": Access.GATE,
+    "/api/gate/features": Access.GATE,
 
     # FastAPI's generated documentation describes the admin API, so it is not
     # handed to strangers.
@@ -112,6 +113,7 @@ ROUTES: dict[str, Access] = {
     "/api/admin/roles/{role_id}": Access.ADMIN,
     "/api/admin/tool-rules": Access.ADMIN,
     "/api/admin/tool-status": Access.ADMIN,
+    "/api/admin/features/{application_key}/{feature_key}": Access.ADMIN,
     "/api/admin/users": Access.ADMIN,
     "/api/admin/users/options": Access.ADMIN,
     "/api/admin/users/{user_id}": Access.ADMIN,

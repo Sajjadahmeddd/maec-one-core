@@ -284,11 +284,12 @@ def test_there_are_two_levels_and_one_list_of_them():
     assert str(check.sqltext) == "access_level IN ('full','no_access')"
 
 
-def test_a_full_cell_does_not_grant_what_the_role_denies(db):
-    """The grid says who may open a tool; the role says what they may do in
-    it (OPEN-DECISIONS #22). Full Access on a role that denies every action of
-    a tool opens nothing — the write path refuses to store it — and Full Access
-    on the employee leaves configuration denied."""
+def test_full_access_switches_on_a_feature_the_role_allows_nothing_in(db):
+    """OPEN-DECISIONS #23: a newly reported feature is denied to every role but
+    Global Admin, and switching it on for a role is what the grid is for — so
+    Full Access on a role that allows nothing in a feature allows every action
+    of it. Where the role allows something, its own rules still decide inside:
+    Full Access on the employee leaves configuration denied (#22)."""
     engineer = user(db, ENGINEER_EMAIL)
     denier = Role(key="denies_hapext", name="Denies HAPExt", level=4,
                   org_id=engineer.org_id, is_custom=True)
@@ -305,8 +306,9 @@ def test_a_full_cell_does_not_grant_what_the_role_denies(db):
     db.add(ToolRule(org_id=engineer.org_id, application_id=app(db).id, module_key="hapext",
                     role_id=denier.id, access_level="full"))
     db.commit()
-    assert can(db, engineer, CONVERT) is False
-    assert can(db, engineer, CONFIGURE) is False
+    assert can(db, engineer, CONVERT) is True
+    assert can(db, engineer, CONFIGURE) is True
+    assert can(db, engineer, "engineering:airsizer:view") is False     # only that feature
 
     grant = db.scalar(select(UserRole).where(UserRole.user_id == engineer.id))
     grant.role_id = role(db, "employee").id
