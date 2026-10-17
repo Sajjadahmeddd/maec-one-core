@@ -417,3 +417,102 @@ def test_bad_secrets_are_limited_and_a_good_one_never_is(apps, limited):
     statuses = [report([feature("task1")], secret="z" * 43).status_code for _ in range(32)]
     assert statuses[0] == 403 and statuses[-1] == 429
     assert all(report([feature("task1")]).status_code == 200 for _ in range(35))
+
+
+# ------------------------------------------------- follow-up: configure, round trip
+FOUR = ["use", "view", "export", "configure"]
+
+
+def _hold(db, role):
+    """The engineer's role in the made-up app is exactly this one."""
+    person = _person(db)
+    db.query(UserRole).filter(UserRole.user_id == person.id,
+                              UserRole.scope_id == "fieldapp").delete()
+    db.add(UserRole(user_id=person.id, role_id=role.id, scope_type="application",
+                    scope_id="fieldapp"))
+    db.commit()
+
+
+def _held(db):
+    from backend.identity.permissions import can
+    db.expire_all()
+    return {a for a in FOUR if can(db, _person(db), f"fieldapp:task1:{a}")}
+
+
+def test_switching_a_feature_on_keeps_configure_with_admin_roles(apps, admin_client, db):
+    """Full Access on a role that allowed nothing: every reported action — but
+    configure only for Global Admin and Business & Commercial Lead."""
+    _seat_and_role(db, "fieldapp", "employee")
+    report([feature("task1", "Field Sheet", FOUR)])
+    org_id = _person(db, ADMIN_EMAIL).org_id
+    it_admin = Role(key="it_admin", name="IT Admin", level=4, org_id=org_id, is_custom=True)
+    db.add(it_admin)
+    db.commit()
+
+    expected = {"employee": {"use", "view", "export"}, "project_lead": {"use", "view", "export"},
+                "it_admin": {"use", "view", "export"}, "business_admin": set(FOUR)}
+    for key, actions in expected.items():
+        role = it_admin if key == "it_admin" else _role(db, key)
+        _hold(db, role)
+        assert _held(db) == set(), f"{key}: off until switched on"
+        assert _grid(admin_client, "fieldapp", "task1", role, "full").status_code == 200
+        assert _held(db) == actions, key
+
+    _hold(db, _role(db, "global_admin"))
+    assert _held(db) == set(FOUR), "Global Admin has every action from the start"
+
+
+def test_off_on_off_on_leaves_the_same_rules_as_the_first_on(apps, admin_client, db):
+    _seat_and_role(db, "fieldapp", "employee")
+    report([feature("task1", "Field Sheet", FOUR)])
+    employee = _role(db, "employee")
+    app_id = _app(db, "fieldapp").id
+
+    def state():
+        db.expire_all()
+        from backend.identity.models import ToolRule
+        cells = sorted((r.module_key, str(r.role_id), r.access_level) for r in db.scalars(
+            select(ToolRule).where(ToolRule.application_id == app_id)).all())
+        rules = sorted(db.execute(select(RolePermission.role_id, Permission.key, RolePermission.effect)
+                                  .join(Permission, Permission.id == RolePermission.permission_id)
+                                  .where(Permission.application_id == app_id)).all())
+        return cells, rules, _held(db)
+
+    audits = _rows(db, "tool_rule.set")
+    sequence = ["no_access", "full", "no_access", "full"]
+    snapshots = []
+    for level in sequence:
+        assert _grid(admin_client, "fieldapp", "task1", employee, level).status_code == 200
+        snapshots.append(state())
+
+    assert snapshots[3] == snapshots[1], "the second Full Access is exactly the first"
+    assert snapshots[2] == snapshots[0], "and the second No Access the first"
+    assert snapshots[1][2] == {"use", "view", "export"}
+    assert snapshots[0][2] == set()
+    assert _rows(db, "tool_rule.set") == audits + len(sequence), "one audit row per change"
+
+
+# ------------------------------------------------- Project Management keeps app/use
+def test_project_management_reporting_app_use_keeps_it_as_it_was(apps, admin_client, db):
+    """Project Management reports `app` with `use`, and always will: it is the
+    existing row, never new, never quiet, never removable — and the gate,
+    launcher and seats carry on exactly as before."""
+    before = _effects(db, "projects:app:use")
+    assert set(before.values()) == {"allow"}
+    _seat_and_role(db, "projects", "employee")
+    cookie = _cookie()
+    gate_before = ask(cookie, "projects").json()
+
+    r = report([feature("app", "Project Management", ["use"])], app="projects")
+    assert r.json() == {"registered": 1, "new": 0, "not_reported": 0}
+    assert report([feature("app", "Project Management", ["use"])], app="projects").json() == r.json()
+    assert _effects(db, "projects:app:use") == before
+    pm = _feature(db, "projects", "app")
+    assert (pm.is_new, pm.not_reported_since) == (False, None)
+    assert ask(cookie, "projects").json() == gate_before
+    assert "projects:app:use" in gate_before["permissions"]
+    r = admin_client.delete("/api/admin/features/projects/app",
+                            headers={CSRF_HEADER: admin_client.csrf})
+    assert r.status_code == 409, "a reported feature cannot be removed"
+    tile = next(a for a in admin_client.get("/api/auth/me").json()["apps"] if a["key"] == "projects")
+    assert tile["status"] == "live"

@@ -288,8 +288,9 @@ def test_full_access_switches_on_a_feature_the_role_allows_nothing_in(db):
     """OPEN-DECISIONS #23: a newly reported feature is denied to every role but
     Global Admin, and switching it on for a role is what the grid is for — so
     Full Access on a role that allows nothing in a feature allows every action
-    of it. Where the role allows something, its own rules still decide inside:
-    Full Access on the employee leaves configuration denied (#22)."""
+    of it but configure, which stays with the built-in admin roles. Where the
+    role allows something, its own rules still decide inside: Full Access on
+    the employee leaves configuration denied (#22)."""
     engineer = user(db, ENGINEER_EMAIL)
     denier = Role(key="denies_hapext", name="Denies HAPExt", level=4,
                   org_id=engineer.org_id, is_custom=True)
@@ -307,7 +308,7 @@ def test_full_access_switches_on_a_feature_the_role_allows_nothing_in(db):
                     role_id=denier.id, access_level="full"))
     db.commit()
     assert can(db, engineer, CONVERT) is True
-    assert can(db, engineer, CONFIGURE) is True
+    assert can(db, engineer, CONFIGURE) is False      # configure stays with admin roles
     assert can(db, engineer, "engineering:airsizer:view") is False     # only that feature
 
     grant = db.scalar(select(UserRole).where(UserRole.user_id == engineer.id))

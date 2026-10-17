@@ -1179,14 +1179,28 @@ feature meant a Core release.
   not new, so nobody loses access. A test fails if any app's feature key
   appears in Core's code outside the tests.
 
-**What changed in the engine (contract 3), and why.** New features start
-denied to every role but Global Admin, and the built-in roles are read-only —
-so under #22 ("Full Access never grants") no built-in role could ever be given
-a new feature. Now Full Access in the grid, on a role that allows **nothing**
-in a feature, allows every action of it. Where a role allows something, its own
-rules still decide inside, exactly as #22: an engineer with Full Access to an
-Engineering Tools feature still may not configure it. No Access and Inactive
-are unchanged. The write path no longer refuses Full Access on such a role.
+**What changed in the engine (contracts 3 and 4), and why.** New features
+start denied to every role but Global Admin, and the built-in roles are
+read-only — so under #22 ("Full Access never grants") no built-in role could
+ever be given a new feature. Now Full Access in the grid, on a role that allows
+**nothing** in a feature, allows every action the app reported for it **except
+`configure`**, which only the built-in admin roles get that way: Global Admin
+and Business & Commercial Lead get every action; Normal User / Engineer,
+Project Lead and every custom role get all but `configure`. Configure stays
+with admin roles. (Contract 4; the loader tells the engine which of a person's
+roles are built-in admin roles, `configuring_roles`, rather than trusting a
+role key's spelling.) Where a role allows something, its own rules still
+decide inside, exactly as #22: an engineer with Full Access to an Engineering
+Tools feature still may not configure it. No Access and Inactive are
+unchanged. The write path no longer refuses Full Access on such a role.
+Switching a cell No Access → Full → No Access → Full leaves exactly the rules
+of the first Full Access, with one audit row per change (tested).
+
+**Project Management keeps `app` / `use`.** It reports that feature, which
+already exists, so it is never New, never "not reported", and never removed or
+retired. Nothing in Core — the launcher, the gate, the seat checks — refers to
+`projects:app:use` by name; they work from application keys, seats,
+subscriptions and the permissions as reported.
 
 **Not done here:** Engineering Tools reporting its features (Prompt 18 Part B)
 and Project Management (Prompt 19). Until each app reports, its existing rows

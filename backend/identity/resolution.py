@@ -26,7 +26,7 @@ from typing import Any
 # can quote, so it says which contract each side believes it implements. Bump it
 # only when what resolve(), to_claims() or from_claims() decide or produce
 # changes — never for a comment or a rename.
-RESOLUTION_CONTRACT = "3"
+RESOLUTION_CONTRACT = "4"
 
 log = logging.getLogger("maec.identity")
 
@@ -63,8 +63,11 @@ SPECIFICITY = {"platform": 1, "organization": 2, "application": 3, "project": 4}
 #              apply unchanged — what it may do inside stays the role's. If the
 #              role allows nothing there (every feature an app has just
 #              reported starts that way for all but Global Admin), Full Access
-#              allows every registered action of the module: switching a new
-#              feature on for a role is what the grid is for.
+#              allows every registered action of the module except `configure`,
+#              which it allows only to the built-in admin roles (Global Admin,
+#              Business & Commercial Lead — `configuring_roles`): switching a
+#              new feature on for a role is what the grid is for, and
+#              configuring it stays with admin roles.
 #   no_access  every action of the module is refused. The boundary.
 #
 # A tool the organisation has switched off (Status: Inactive) is refused for
@@ -141,6 +144,13 @@ class ResolutionInput:
     # modules this organisation has switched off (Status: Inactive). Refused
     # for everyone, whatever their roles or the grid say.
     inactive_modules: frozenset[str] = frozenset()
+    # the person's roles that are built-in admin roles: the only ones a Full
+    # Access cell gives `configure` (the role's own rules aside)
+    configuring_roles: frozenset[str] = frozenset()
+
+
+# The action a switched-on feature gives only to admin roles.
+CONFIGURE = "configure"
 
 
 def _allows_any(data: ResolutionInput, role_id: str, module_key: str) -> bool:
@@ -216,7 +226,7 @@ def resolve(data: ResolutionInput, permission_key: str,
         matches: list[tuple[int, str, Grant]] = []
         for grant in grants:
             effect = data.role_permissions.get((grant.role_id, permission_key))
-            if data.tool_rules.get((module_key, grant.role_id)) == "full"                     and not _allows_any(data, grant.role_id, module_key):
+            if data.tool_rules.get((module_key, grant.role_id)) == "full"                     and not _allows_any(data, grant.role_id, module_key)                     and (action != CONFIGURE or grant.role_id in data.configuring_roles):
                 effect = "allow"
             if effect is not None:
                 matches.append((SPECIFICITY[grant.scope_type], effect, grant))
@@ -297,6 +307,7 @@ def to_claims(data: ResolutionInput) -> dict[str, Any]:
         ],
         "registered": sorted(data.registered),
         "inactive_modules": sorted(data.inactive_modules),
+        "configuring_roles": sorted(data.configuring_roles),
     }
 
 
@@ -329,4 +340,5 @@ def from_claims(claims: Mapping[str, Any]) -> ResolutionInput:
         # everything rather than read as allowing any key
         registered=frozenset(claims.get("registered", [])),
         inactive_modules=frozenset(claims.get("inactive_modules", [])),
+        configuring_roles=frozenset(claims.get("configuring_roles", [])),
     )

@@ -118,7 +118,9 @@ What Core does with it:
 
 * **A new feature** appears in Tool-Level Settings as "*<App>* – *<name>*",
   marked **New**, switched **on for Global Admin only**, off for every other
-  role. A Global Admin switches it on per role.
+  role. A Global Admin switches it on per role: Full Access then gives that
+  role every action you reported for it except `configure` — configure stays
+  with admin roles (Global Admin, Business & Commercial Lead).
 * **A known feature** keeps every rule an administrator set; only its name
   follows your list.
 * **A feature you stop sending** is never deleted. It is marked "No longer

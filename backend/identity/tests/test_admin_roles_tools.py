@@ -219,8 +219,9 @@ def test_full_access_switches_a_feature_on_for_a_role_that_had_nothing(admin_cli
     assert _put(admin_client, "hapext", it_admin, "full").status_code == 200
     db.expire_all()
     engineer = db_user(db, ENGINEER_EMAIL)
-    for action in ("view", "convert", "export", "configure"):
+    for action in ("view", "convert", "export"):
         assert can(db, engineer, f"engineering:hapext:{action}") is True, action
+    assert can(db, engineer, "engineering:hapext:configure") is False, "configure stays with admin roles"
     assert can(db, engineer, "engineering:airsizer:view") is False, "only that feature"
     assert _put(admin_client, "hapext", it_admin, "no_access").status_code == 200
     assert can(db, db_user(db, ENGINEER_EMAIL), "engineering:hapext:view") is False

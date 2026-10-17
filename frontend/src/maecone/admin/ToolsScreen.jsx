@@ -219,8 +219,9 @@ export default function ToolsScreen() {
         Features appear here automatically when an app reports them. New features
         start switched off for everyone except Global Admin. Switching a role to
         No Access hides the feature in the app and blocks it, from the
-        person&apos;s next click. To give one person a different role in one
-        app, use User &amp; Role Access with that app as the scope.
+        person&apos;s next click. Configure stays with admin roles. To give one
+        person a different role in one app, use User &amp; Role Access with that
+        app as the scope.
       </p>
     </div>
   )

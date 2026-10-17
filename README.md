@@ -192,7 +192,7 @@ and signs out the sessions minted under the old password. Then unset it.
 .venv/Scripts/python -m pytest
 ```
 
-658 tests. 632 run against an in-memory SQLite; 23 run against the PostgreSQL
+661 tests. 635 run against an in-memory SQLite; 23 run against the PostgreSQL
 in your `.env` and cover what SQLite cannot — column widths, CHECK
 constraints, the append-only trigger, the migrations run up and down with data
 present, real concurrency on single-use authorization codes, and a session

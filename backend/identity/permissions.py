@@ -40,6 +40,8 @@ from .resolution import (  # noqa: F401  (re-exported)
 
 GLOBAL_ADMIN = "global_admin"
 BUSINESS_ADMIN = "business_admin"
+# The built-in roles a switched-on feature gives `configure` (#23).
+CONFIGURING_ROLE_KEYS = (GLOBAL_ADMIN, BUSINESS_ADMIN)
 
 
 def is_builtin(role: Role, key: str | None = None) -> bool:
@@ -212,6 +214,11 @@ def load(db: Session, user: User, app_key: str) -> ResolutionInput:
     # the registry: what "full" covers, and the only keys that can be allowed
     registered = frozenset(db.scalars(select(Permission.key).where(
         Permission.application_id == app.id)).all())
+    # the person's built-in admin roles: the only ones a Full Access cell
+    # gives `configure` on a feature their role allowed nothing in (#23)
+    configuring_roles = frozenset(str(role_id) for role_id in db.scalars(
+        select(Role.id).where(Role.id.in_(role_ids), Role.org_id.is_(None),
+                              Role.key.in_(CONFIGURING_ROLE_KEYS))).all()) if role_ids else frozenset()
     # tools this organisation has switched off, for everyone
     inactive_modules = frozenset(db.scalars(select(ToolSetting.module_key).where(
         ToolSetting.org_id == user.org_id, ToolSetting.application_id == app.id,
@@ -222,6 +229,7 @@ def load(db: Session, user: User, app_key: str) -> ResolutionInput:
         entitled_until=entitled_until, grants=grants,
         role_permissions=role_permissions, tool_rules=tool_rules,
         registered=registered, inactive_modules=inactive_modules,
+        configuring_roles=configuring_roles,
     )
 
 
